@@ -4,3 +4,4 @@ pyvistaqt
 ikpy
 xarm-python-sdk
 pyserial
+sv_ttk
