@@ -1,5 +1,3 @@
-# LiteSim
-A desktop simulator with GUI for the UFACTORY Lite 6 robotic arm.
 # LiteSim: UFACTORY Lite 6 Simulator & Controller
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
@@ -28,6 +26,21 @@ Built with **PyVista** for 3D rendering and **sv_ttk** for a modern UI experienc
 * **Trace Path:** Draw lines in 3D space to visualize the robot's path (switchable between Wrist and End-Effector Tip).
 * **Ghost Mode:** Make the robot transparent (10% opacity) to view the path clearly, with an option to keep the end-effector fully visible.
 * **Custom Colors:** Fully customizable colors for the background, arm, wrist, effector, and trace lines.
+
+---
+
+## 🛠️ Support & Compatibility
+
+LiteSim is developed and tested on modern hardware to ensure the best performance for 3D simulation.
+
+### ✅ Officially Supported
+We provide pre-built executables (`.exe` / `.app`) and full support for:
+* **Windows 10 / 11** (x64)
+* **macOS** (Apple Silicon)
+
+### ⚠️ Apple Intel Users
+We **do not** provide pre-built applications for Intel-based Macs.
+However, LiteSim is fully compatible with Intel Macs if run directly from the source code. Please set up a Conda or Python environment with the libraries found in `requirements.txt` and run `python main.py` to get started.
 
 ---
 
