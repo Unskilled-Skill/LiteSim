@@ -4,7 +4,7 @@ import os
 
 # --- APP INFO ---
 APP_NAME = "LiteSim"
-APP_VERSION = "1.9.5"
+APP_VERSION = "1.9.6"
 AUTHOR = "Dylan Kiesebrink"
 GITHUB_URL = "https://github.com/scoopy115/LiteSim"
 PORTFOLIO_URL = "https://dylankiesebrink.nl"
@@ -28,13 +28,28 @@ except ImportError:
     print("[SYSTEM] xarm-python-sdk not found. Working in simulation-mode only.")
 
 # --- FILE PATHS ---
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+if getattr(sys, 'frozen', False):
+    PROJECT_ROOT = sys._MEIPASS
+else:
+    PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+USER_DATA_DIR = os.path.join(os.path.expanduser("~"), ".litesim")
+
+if not os.path.exists(USER_DATA_DIR):
+    try:
+        os.makedirs(USER_DATA_DIR)
+    except OSError:
+        pass
+
+# --- DEFINE PATHS ---
+
 MODEL_DIR = os.path.join(PROJECT_ROOT, "model")
 VISUAL_DIR = os.path.join(MODEL_DIR, "visual")
 EXAMPLES_DIR = os.path.join(PROJECT_ROOT, "examples")
-ICON_PATH = os.path.join("assets", "icon.png")
-HISTORY_FILE = "recent_scripts.txt" 
-STL_HISTORY_FILE = "recent_stls.txt"
+ICON_PATH = os.path.join(PROJECT_ROOT, "assets", "icon.png")
+HISTORY_FILE = os.path.join(USER_DATA_DIR, "recent_scripts.txt")
+STL_HISTORY_FILE = os.path.join(USER_DATA_DIR, "recent_stls.txt")
 
 # --- WINDOW SETTINGS ---
 WINDOW_WIDTH = 800

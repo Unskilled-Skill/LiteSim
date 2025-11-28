@@ -34,10 +34,8 @@ class ControlPanel(tk.Tk):
         self.header_icon = None
 
         try:
-            icon_path = os.path.join(os.path.dirname(__file__), "assets", "icon.png")
-            
-            if os.path.exists(icon_path):
-                self.app_icon = tk.PhotoImage(file=icon_path)
+            if os.path.exists(config.ICON_PATH):
+                self.app_icon = tk.PhotoImage(file=config.ICON_PATH)
                 self.iconphoto(True, self.app_icon)
                 self.wm_iconname("LiteSim")
                 self.header_icon = self.app_icon.subsample(12, 12) 
@@ -91,16 +89,7 @@ class ControlPanel(tk.Tk):
         self._apply_modern_theme()
 
     def _load_history(self):
-        # Reset list
         self.script_history = []
-        if os.path.exists(config.EXAMPLES_DIR):
-            try:
-                for filename in os.listdir(config.EXAMPLES_DIR):
-                    if filename.endswith(".py"):
-                        full_path = os.path.join(config.EXAMPLES_DIR, filename)
-                        self.script_history.append(full_path)
-            except Exception as e:
-                print(f"[GUI] Error loading examples: {e}")
 
         if os.path.exists(config.HISTORY_FILE):
             try:
@@ -112,6 +101,17 @@ class ControlPanel(tk.Tk):
                             if path not in self.script_history:
                                 self.script_history.append(path)
             except: pass
+
+        if os.path.exists(config.EXAMPLES_DIR):
+            try:
+                for filename in os.listdir(config.EXAMPLES_DIR):
+                    if filename.endswith(".py"):
+                        full_path = os.path.join(config.EXAMPLES_DIR, filename)
+                        if full_path not in self.script_history:
+                            self.script_history.append(full_path)
+            except Exception as e:
+                print(f"[GUI] Error loading examples: {e}")
+
         display_names = []
         for p in self.script_history:
             name = os.path.basename(p)
@@ -120,6 +120,7 @@ class ControlPanel(tk.Tk):
             display_names.append(name)
             
         self.combo_history['values'] = display_names
+
         if display_names:
             self.combo_history.current(0)
             self.current_script_path = self.script_history[0]
@@ -609,20 +610,31 @@ class ControlPanel(tk.Tk):
         if path: self._add_to_history(path)
 
     def _add_to_history(self, path):
-        if path not in self.script_history:
-            self.script_history.insert(0, path)
-        else:
+        if path in self.script_history:
             self.script_history.remove(path)
-            self.script_history.insert(0, path)
+        self.script_history.insert(0, path)
         
-        with open(HISTORY_FILE, "w") as f:
-            for p in self.script_history: f.write(p + "\n")
-
-        display_names = [os.path.basename(p) for p in self.script_history]
-        self.combo_history['values'] = display_names
-        self.combo_history.current(0)
         self.current_script_path = path
         self.btn_run.config(state=tk.NORMAL)
+        
+        display_names = []
+        for p in self.script_history:
+            name = os.path.basename(p)
+            if config.EXAMPLES_DIR in p: 
+                name = f"[Example] {name}"
+            display_names.append(name)
+        
+        self.combo_history['values'] = display_names
+        self.combo_history.set(display_names[0])
+
+        try:
+            user_scripts = [p for p in self.script_history if config.EXAMPLES_DIR not in p]
+
+            with open(config.HISTORY_FILE, "w") as f:
+                for p in user_scripts[:10]: 
+                    f.write(p + "\n")
+        except Exception as e: 
+            print(f"History save error: {e}")
 
     def _on_history_select(self, event):
         idx = self.combo_history.current()
@@ -701,23 +713,25 @@ class ControlPanel(tk.Tk):
             messagebox.showerror("Color Error", f"Invalid color code: {color_str}\nUse Hex (e.g. #FF0000) or names (red, blue).")
     
     def _load_stl_history(self):
-        if os.path.exists(STL_HISTORY_FILE):
+        self.stl_history = []
+        
+        if os.path.exists(config.STL_HISTORY_FILE):
             try:
-                with open(STL_HISTORY_FILE, "r") as f:
+                with open(config.STL_HISTORY_FILE, "r") as f:
                     lines = f.readlines()
                     for line in lines:
                         path = line.strip()
                         if path and os.path.exists(path):
                             if path not in self.stl_history:
                                 self.stl_history.append(path)
-                
-                # Update dropdown
-                display_names = [os.path.basename(p) for p in self.stl_history]
-                self.combo_stls['values'] = display_names
-                if display_names:
-                    self.combo_stls.set("Select recent STL...")
             except Exception as e:
-                print(f"STL History error: {e}")
+                print(f"[GUI] STL History load error: {e}")
+
+        display_names = [os.path.basename(p) for p in self.stl_history]
+        self.combo_stls['values'] = display_names
+        
+        if display_names:
+            self.combo_stls.set("Select recent STL...")
 
     def _add_to_stl_history(self, path):
         if path in self.stl_history:
@@ -726,9 +740,14 @@ class ControlPanel(tk.Tk):
         
         self.stl_history = self.stl_history[:10]
 
-        with open(STL_HISTORY_FILE, "w") as f:
-            for p in self.stl_history: f.write(p + "\n")
+        try:
+            with open(config.STL_HISTORY_FILE, "w") as f:
+                for p in self.stl_history:
+                    f.write(p + "\n")
+        except Exception as e:
+            print(f"[GUI] STL History save error: {e}")
 
+        # Update UI direct
         display_names = [os.path.basename(p) for p in self.stl_history]
         self.combo_stls['values'] = display_names
         self.combo_stls.current(0)
