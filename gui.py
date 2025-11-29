@@ -300,7 +300,7 @@ class ControlPanel(tk.Tk):
         # SUBTITLE
         lbl_credits = ttk.Label(
             text_container, 
-            text="Made with ❤️ by Gemini 3 Pro & Dylan Kiesebrink", 
+            text="Made with ♡ by Gemini 3 Pro & Dylan Kiesebrink", 
             font=("Helvetica", 10),
             foreground="#888888"
         )

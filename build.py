@@ -55,10 +55,7 @@ VSVersionInfo(
 # BUILD ARGS
 args = [
     'main.py',                        
-    f'--name={APP_NAME}',             
-    '--noconsole',      
-    '--onefile',                    
-    '--clean',                        
+    f'--name={APP_NAME}_{VERSION}',                                    
     f'--icon={ICON_PATH}',            
     
     f'--add-data=assets{SEPARATOR}assets',
@@ -72,6 +69,10 @@ args = [
     '--hidden-import=visualizer',
     '--hidden-import=config',
     '--hidden-import=utils',
+
+    '--noconsole',      
+    '--onefile',            
+    '--clean', 
 ]
 
 if sys.platform == "win32":
