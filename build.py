@@ -79,18 +79,19 @@ args = [
     '--hidden-import=config',
     '--hidden-import=utils',
 
-    '--noconsole',      
-    '--onefile',            
+    '--noconsole',                
     '--clean', 
 ]
 
 if sys.platform == "win32":
     print("--- BUILDING FOR WINDOWS ---")
+    args.append('--onefile')
     v_file = create_windows_version_file()
     args.append(f'--version-file={v_file}')
 
 elif sys.platform == "darwin":
     print("--- BUILDING FOR MACOS ---")
+    args.append('--onedir')
     bundle_id = f"nl.{AUTHOR.lower().replace(' ', '')}.{APP_NAME.lower()}"
     args.append(f'--osx-bundle-identifier={bundle_id}')
 
