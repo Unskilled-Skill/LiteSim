@@ -78,7 +78,6 @@ args = [
     '--hidden-import=visualizer',
     '--hidden-import=config',
     '--hidden-import=utils',
-    '--noconfirm', # Automatically overwrite old dist version
     '--noconsole',                
     '--clean', 
 ]

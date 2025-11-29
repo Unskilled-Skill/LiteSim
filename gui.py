@@ -839,7 +839,6 @@ class ControlPanel(tk.Tk):
     def _stop_script(self):
         self.ctx.stop_flag = True
         self.ctx.paused = False
-        self._home()
         self.ctx.log_queue.put("[UI] Stop signal...")
         
 
@@ -861,13 +860,11 @@ class ControlPanel(tk.Tk):
         self._toggle_controls(False)
         if self.ctx.stop_flag:
             self.ctx.log_queue.put("[LOOP] Stopped by user.")
-            self.api.disconnect_real_robot()
+            self._home()
             return
         if self.loop_var.get():
             self.ctx.log_queue.put("[LOOP] Looping...")
             self.after(0, self._run_current_script)
-        else:
-            self.api.disconnect_real_robot()
 
     def _apply_color(self, target, color_str):
         success = self.viz.set_color(target, color_str)
