@@ -628,11 +628,13 @@ class ControlPanel(tk.Tk):
 
         def toggle_trace():
             self.viz.set_trace_enable(self.trace_var.get())
-            
-        ttk.Checkbutton(trace_row, text="Trace Path", 
-                        variable=self.trace_var, 
-                        command=toggle_trace).pack(side=tk.LEFT, padx=5)
 
+        self.chk_trace = ttk.Checkbutton(trace_row, text="Trace Path", 
+                        variable=self.trace_var, 
+                        command=toggle_trace)
+        self.chk_trace.pack(side=tk.LEFT, padx=5)
+
+        # 2. TRACE DROPDOWN
         self.trace_mode_var = tk.StringVar(value="Wrist")
         
         def change_trace_source(event):
@@ -640,10 +642,10 @@ class ControlPanel(tk.Tk):
             self.viz.trace_source = mode
             self.viz.clear_trace() 
 
-        trace_combo = ttk.Combobox(trace_row, textvariable=self.trace_mode_var, 
+        self.trace_combo = ttk.Combobox(trace_row, textvariable=self.trace_mode_var, 
                                    values=["Wrist", "Effector Tip"], state="readonly", width=10)
-        trace_combo.pack(side=tk.LEFT, padx=5)
-        trace_combo.bind("<<ComboboxSelected>>", change_trace_source)
+        self.trace_combo.pack(side=tk.LEFT, padx=5)
+        self.trace_combo.bind("<<ComboboxSelected>>", change_trace_source)
 
         # ROW 2: Visibility settings
         visibility_row = ttk.LabelFrame(right_col, text="Visibility Settings")
@@ -676,6 +678,7 @@ class ControlPanel(tk.Tk):
 
         ttk.Checkbutton(visibility_row, text="Collision Alerts", 
                         variable=self.collision_alert_var).pack(side=tk.LEFT, padx=5)
+        
 
         # COLUMN 3
         log_col = ttk.Frame(top_container)
@@ -794,6 +797,18 @@ class ControlPanel(tk.Tk):
             self.combo_history.config(state="disabled")
         else:
             self.combo_history.config(state="readonly")
+
+        combo_state = "disabled" if running else "readonly"
+        self.combo_history.config(state=combo_state)
+        
+        if hasattr(self, 'trace_combo'):
+            self.trace_combo.config(state=combo_state)
+            
+        if hasattr(self, 'chk_trace'):
+            self.chk_trace.config(state=config_state)
+            
+        if hasattr(self, 'chk_ghost'):
+            self.chk_ghost.config(state=config_state)
 
     def _toggle_pause(self):
         if self.ctx.paused:
