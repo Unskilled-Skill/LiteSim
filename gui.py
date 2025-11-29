@@ -15,6 +15,7 @@ import sv_ttk
 import platform
 import json
 import zipfile
+import subprocess
 from pathlib import Path
 from urllib.request import urlretrieve, urlopen
 from visualizer import RobotVisualizer
@@ -1146,11 +1147,28 @@ class ControlPanel(tk.Tk):
 
     def _on_download_success(self, zip_path, folder_path):
         try:
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(folder_path)
-                extracted_item_name = zip_ref.namelist()[0]
-                full_extracted_path = folder_path / extracted_item_name
-                
+            extracted_path_hint = None
+            
+            if platform.system() == "Darwin": # macOS
+                try:
+                    subprocess.run(
+                        ["unzip", "-o", "-q", str(zip_path), "-d", str(folder_path)], 
+                        check=True
+                    )
+                    
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        extracted_item_name = zip_ref.namelist()[0].split('/')[0]
+                        extracted_path_hint = folder_path / extracted_item_name
+                        
+                except Exception as e:
+                    raise Exception(f"System unzip failed: {e}")
+
+            else: 
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(folder_path)
+                    extracted_item_name = zip_ref.namelist()[0]
+                    extracted_path_hint = folder_path / extracted_item_name
+
             self.ctx.log_queue.put(f"[UPDATE] Successfully extracted to: {folder_path}")
 
             if platform.system() == "Windows":
@@ -1158,7 +1176,10 @@ class ControlPanel(tk.Tk):
                 
             elif platform.system() == "Darwin": # macOS
                 try:
-                    os.system(f"open -R '{full_extracted_path}'")
+                    if extracted_path_hint and extracted_path_hint.exists():
+                        os.system(f"open -R '{extracted_path_hint}'")
+                    else:
+                        os.system(f"open '{folder_path}'")
                 except:
                     os.system(f"open '{folder_path}'")
             
@@ -1167,7 +1188,6 @@ class ControlPanel(tk.Tk):
                     
         except Exception as e:
             messagebox.showerror("Extraction Error", f"Downloaded but failed to extract:\n{e}")
-
 if __name__ == "__main__":
     app = ControlPanel()
     app.mainloop()
