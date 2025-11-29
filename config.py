@@ -4,7 +4,7 @@ import os
 
 # --- APP INFO ---
 APP_NAME = "LiteSim"
-APP_VERSION = "1.9.7"
+APP_VERSION = "1.9.8"
 AUTHOR = "Dylan Kiesebrink"
 GITHUB_URL = "https://github.com/scoopy115/LiteSim"
 REPO_OWNER = "scoopy115"
@@ -13,7 +13,7 @@ PORTFOLIO_URL = "https://dylankiesebrink.nl"
 
 # --- ROBOT CONFIGURATION ---
 JOINT_COUNT = 6
-ROBOT_Z_OFFSET = -0.19
+ROBOT_Z_OFFSET = 0.0
 SIM_SPEED_FACTOR = 1.0 
 ROBOT_SCAN_PORT = 30002
 

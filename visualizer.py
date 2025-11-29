@@ -32,7 +32,6 @@ class RobotVisualizer:
         self.eef_offset_z = 0.0     
     
     def get_urdf_path(self):
-        """Zoekt de .urdf direct in de model map"""
         if not os.path.exists(config.MODEL_DIR):
             print(f"[ERR] Model directory not found: {config.MODEL_DIR}")
             return None
@@ -42,7 +41,6 @@ class RobotVisualizer:
         return None
 
     def get_mesh_path(self, filename):
-        """Geeft het directe pad naar een STL in de visual map"""
         if not filename: return None
         return os.path.join(config.VISUAL_DIR, filename)
 
@@ -98,7 +96,6 @@ class RobotVisualizer:
 
             print(f"Link {i} ('{link.name}') -> Mapped to: {expected_stl}")
 
-            # AANGEPAST: Direct path lookup ipv find_stl_deep
             mesh = None
 
             if is_end_effector:
@@ -128,12 +125,12 @@ class RobotVisualizer:
             if is_end_effector:
                 self.ee_actor = actor
         print("-" * 30)
-
-        self.plotter.add_floor('-z', show_edges=True, line_width=1, color='#f4f4f4', pad=2.5, opacity=0.25)
+        
+        floor = pv.Plane(center=(0, 0, 0), direction=(0, 0, 1), i_size=1, j_size=1, i_resolution=20, j_resolution=20)
+        self.plotter.add_mesh(floor, color='#333333', show_edges=True, opacity=0.5, line_width=1)
+        
         self.plotter.add_axes()
-        self.plotter.reset_camera()
-        self.plotter.camera.zoom(config.INITIAL_ZOOM_LEVEL)
-
+        self.plotter.view_isometric()
         self.plotter.enable_anti_aliasing()
         
         self.plotter.show(interactive_update=True, auto_close=False)
@@ -215,80 +212,91 @@ class RobotVisualizer:
         self.plotter.render()
 
     def render_frame(self):
-            if self.plotter is None or self.chain is None: return
-            if not hasattr(self.plotter, 'ren_win') or self.plotter.ren_win is None: return
+        if self.plotter is None or self.chain is None: return False
+        if not hasattr(self.plotter, 'ren_win') or self.plotter.ren_win is None: return False
 
-            try:
-                target_vector = [0.0] * len(self.chain.links)
-                joint_idx = 0
-                for i, is_active in enumerate(self.chain.active_links_mask):
-                    if is_active and joint_idx < len(self.current_joints):
-                        deg = self.current_joints[joint_idx]
-                        target_vector[i] = math.radians(deg)
-                        joint_idx += 1
+        try:
+            target_vector = [0.0] * len(self.chain.links)
+            joint_idx = 0
+            for i, is_active in enumerate(self.chain.active_links_mask):
+                if is_active and joint_idx < len(self.current_joints):
+                    deg = self.current_joints[joint_idx]
+                    target_vector[i] = math.radians(deg)
+                    joint_idx += 1
+            matrices = self.chain.forward_kinematics(target_vector, full_kinematics=True)
+            current_ee_pos = None
+            collision_detected = False
+            COLLISION_THRESHOLD = 0.009 
+            for i, matrix in enumerate(matrices):
                 
-                matrices = self.chain.forward_kinematics(target_vector, full_kinematics=True)
-                current_ee_pos = None
-
-                for i, matrix in enumerate(matrices):
+                if i == len(matrices) - 1:
+                    wrist_x = matrix[0, 3]
+                    wrist_y = matrix[1, 3]
+                    wrist_z = matrix[2, 3] + config.ROBOT_Z_OFFSET
                     
-                    if i == len(matrices) - 1:
-                        
-                        # Base position for wrist/flange
-                        wrist_x = matrix[0, 3]
-                        wrist_y = matrix[1, 3]
-                        wrist_z = matrix[2, 3] + config.ROBOT_Z_OFFSET
-                        
-                        if 'tip' in self.trace_source.lower() and hasattr(self, 'eef_offset_z') and self.eef_offset_z > 0:
-                            rot_matrix = matrix[:3, :3]
-                            local_offset = np.array([0.0, 0.0, self.eef_offset_z])
-                            world_offset = rot_matrix @ local_offset
-                            
-                            current_ee_pos = [
-                                wrist_x + world_offset[0],
-                                wrist_y + world_offset[1],
-                                wrist_z + world_offset[2]
-                            ]
-                        else:
-                            current_ee_pos = [wrist_x, wrist_y, wrist_z]
+                    if wrist_z < COLLISION_THRESHOLD:
+                        collision_detected = True
 
-                    if i < len(self.link_map):
-                        actor = self.link_map[i]
-                        if actor is not None:
-                            mat_copy = matrix.copy()
-                            mat_copy[2, 3] += config.ROBOT_Z_OFFSET
-                            actor.user_matrix = mat_copy 
-                
-                if self.trace_enabled and current_ee_pos:
-                    should_add = False
-                    if self.last_trace_pos is None: 
-                        should_add = True
+                    if 'tip' in self.trace_source.lower() and hasattr(self, 'eef_offset_z') and self.eef_offset_z > 0:
+                        rot_matrix = matrix[:3, :3]
+                        local_offset = np.array([0.0, 0.0, self.eef_offset_z])
+                        world_offset = rot_matrix @ local_offset
+                        
+                        current_ee_pos = [
+                            wrist_x + world_offset[0],
+                            wrist_y + world_offset[1],
+                            wrist_z + world_offset[2]
+                        ]
+                        
+                        if current_ee_pos[2] < COLLISION_THRESHOLD:
+                            collision_detected = True
                     else:
-                        dist = math.sqrt(sum([(a - b) ** 2 for a, b in zip(current_ee_pos, self.last_trace_pos)]))
-                        if dist > 0.001: should_add = True
-                    
-                    if should_add:
-                        self.trace_points.append(current_ee_pos)
-                        self.last_trace_pos = current_ee_pos
-                        
-                        if len(self.trace_points) > 1:
-                            if self.trace_actor: 
-                                self.plotter.remove_actor(self.trace_actor)
-                            
-                            points_array = np.array(self.trace_points)
-                            line_mesh = pv.lines_from_points(points_array)
-                            self.trace_actor = self.plotter.add_mesh(
-                                line_mesh, 
-                                color=self.trace_color, 
-                                line_width=4, 
-                                reset_camera=False
-                            )
-                
-                # Render image
-                self.plotter.render() 
+                        current_ee_pos = [wrist_x, wrist_y, wrist_z]
 
-            except Exception: 
-                pass
+                if i < len(self.link_map):
+                    actor = self.link_map[i]
+                    if actor is not None:
+                        mat_copy = matrix.copy()
+                        mat_copy[2, 3] += config.ROBOT_Z_OFFSET
+                        actor.user_matrix = mat_copy 
+            
+            if collision_detected:
+                self.set_color("arm", "#ff0000")
+                self.set_color("wrist", "#ff0000")
+                self.set_color("eef", "#ff0000")
+                self.plotter.render()
+                return True 
+
+            if self.trace_enabled and current_ee_pos:
+                should_add = False
+                if self.last_trace_pos is None: 
+                    should_add = True
+                else:
+                    dist = math.sqrt(sum([(a - b) ** 2 for a, b in zip(current_ee_pos, self.last_trace_pos)]))
+                    if dist > 0.001: should_add = True
+                
+                if should_add:
+                    self.trace_points.append(current_ee_pos)
+                    self.last_trace_pos = current_ee_pos
+                    
+                    if len(self.trace_points) > 1:
+                        if self.trace_actor: 
+                            self.plotter.remove_actor(self.trace_actor)
+                        
+                        points_array = np.array(self.trace_points)
+                        line_mesh = pv.lines_from_points(points_array)
+                        self.trace_actor = self.plotter.add_mesh(
+                            line_mesh, 
+                            color=self.trace_color, 
+                            line_width=4, 
+                            reset_camera=False
+                        )
+            
+            self.plotter.render() 
+            return False
+
+        except Exception: 
+            return False
 
     def set_color(self, target, color_hex):
         if not self.plotter: return False

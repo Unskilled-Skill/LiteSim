@@ -158,19 +158,47 @@ class ControlPanel(tk.Tk):
             self.after(500, self._update_3d_loop)
             return
         
-        if not self.viz or not self.viz.plotter:
-            return
-
-        # Idk why but this does not work
-        if self.viz.plotter.ren_win is None:
-            print("[SYSTEM] 3D Viewer closed by user. Shutting down...")
+        if not self.viz or not self.viz.plotter: return
+        
+        if hasattr(self.viz.plotter, 'ren_win') and self.viz.plotter.ren_win is None:
             self._on_close()
             return
 
-        try:
-            self.viz.render_frame()
-            self.after(10, self._update_3d_loop)
-        except Exception: pass
+        try: 
+            is_collision = self.viz.render_frame()
+            
+            if is_collision:
+                self._handle_collision()
+                return
+                
+        except: pass
+        
+        self.after(40, self._update_3d_loop)
+
+    # Collision handler
+    def _handle_collision(self):
+        self.ctx.stop_flag = True
+        self.rendering_paused = True
+        self.btn_run.config(state=tk.NORMAL)
+        
+        self.ctx.log_queue.put("[ALERT] COLLISION DETECTED! Robot hit the floor.")
+        
+        messagebox.showerror(
+            "COLLISION DETECTED", 
+            "The robot arm or end-effector hit the floor!\n\nThe simulation has been paused.\nClick OK to reset the robot to Home position."
+        )
+        
+        self._stop_script()
+        self._home()
+        self.viz.set_color("arm", "#f4f4f4")
+        self.viz.set_color("wrist", "#ff5015")
+        self.viz.set_color("eef", "#f4f4f4")
+        
+        self.after(100, self._resume_from_crash)
+
+    def _resume_from_crash(self):
+        self.rendering_paused = False
+        self._update_3d_loop()
 
     def _process_queues(self):
         while not self.ctx.log_queue.empty():
