@@ -1,6 +1,7 @@
 # LiteSim: UFACTORY Lite 6 Simulator & Controller
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?logo=python&logoColor=white)
+![Status](https://img.shields.io/badge/Status-Active-success)
 
 **LiteSim** is a modern Python simulator and controller for the **UFACTORY Lite 6** robotic arm. It allows users to simulate movements using Inverse Kinematics (IK), visualize custom end-effectors, and control the physical robot seamlessly from a unified, dark-themed interface.
 
