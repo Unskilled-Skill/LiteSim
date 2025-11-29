@@ -82,6 +82,8 @@ class ControlPanel(tk.Tk):
         self.trace_var = tk.BooleanVar(value=False)
         self.pending_update_data = None
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.color_vars = {}
+        self.was_colliding = False
         
         self.rendering_paused = False
 
@@ -157,9 +159,7 @@ class ControlPanel(tk.Tk):
         if self.rendering_paused:
             self.after(500, self._update_3d_loop)
             return
-        
         if not self.viz or not self.viz.plotter: return
-        
         if hasattr(self.viz.plotter, 'ren_win') and self.viz.plotter.ren_win is None:
             self._on_close()
             return
@@ -168,12 +168,26 @@ class ControlPanel(tk.Tk):
             is_collision = self.viz.render_frame()
             
             if is_collision:
-                self._handle_collision()
-                return
+                self.was_colliding = True 
                 
-        except: pass
+                if self.collision_alert_var.get():
+                    self._handle_collision() 
+                    return 
+            
+            else:
+                if self.was_colliding:
+                    for target, var in self.color_vars.items():
+                        if target in ["arm", "wrist", "eef"]:
+                            self._apply_color(target, var.get())
+                    
+                    self.was_colliding = False
+
+        except Exception: pass
         
+        # 4. Plan volgende frame
         self.after(40, self._update_3d_loop)
+        
+
 
     # Collision handler
     def _handle_collision(self):
@@ -190,9 +204,9 @@ class ControlPanel(tk.Tk):
         
         self._stop_script()
         self._home()
-        self.viz.set_color("arm", "#f4f4f4")
-        self.viz.set_color("wrist", "#ff5015")
-        self.viz.set_color("eef", "#f4f4f4")
+        for target, var in self.color_vars.items():
+            if target in ["arm", "wrist", "eef"]:
+                self._apply_color(target, var.get())
         
         self.after(100, self._resume_from_crash)
 
@@ -540,8 +554,8 @@ class ControlPanel(tk.Tk):
         ttk.Button(vf, text="Top", command=lambda: self.viz.set_camera_view('top', 1.6)).grid(row=0, column=4, sticky="ew", padx=2, pady=5)
         ttk.Button(vf, text="Iso", command=self._reset_view).grid(row=0, column=5, sticky="ew", padx=2, pady=5)
 
-        # Colour Settings
-        cf_frame = ttk.LabelFrame(right_col, text="Colour Settings")
+        # Color Settings
+        cf_frame = ttk.LabelFrame(right_col, text="Color Settings")
         cf_frame.pack(fill=tk.X, pady=5)
 
         def create_color_row(parent, label_text, default_val, target_key):
@@ -551,6 +565,7 @@ class ControlPanel(tk.Tk):
             ttk.Label(row, text=label_text, width=10).pack(side=tk.LEFT, padx=5)
             
             var = tk.StringVar(value=default_val)
+            self.color_vars[target_key] = var
             ent = ttk.Entry(row, textvariable=var, width=10)
             ent.pack(side=tk.LEFT, padx=5)
 
@@ -566,7 +581,25 @@ class ControlPanel(tk.Tk):
 
             update_preview(default_val)
 
-            var.trace_add("write", lambda *args: update_preview(var.get()))
+            def on_var_change(*args):
+                val = var.get()
+                
+                if not val.startswith("#"):
+                    var.set("#" + val)
+                    return 
+
+                if val.count("#") > 1:
+                    clean_val = val.replace("#", "")
+                    var.set("#" + clean_val)
+                    return
+
+                if len(val) > 7:
+                    var.set(val[:7])
+                    return
+
+                update_preview(val)
+            
+            var.trace_add("write", on_var_change)
 
             def reset_action():
                 var.set(default_val)
@@ -580,11 +613,11 @@ class ControlPanel(tk.Tk):
                        command=lambda: self._apply_color(target_key, var.get())
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
 
-        create_color_row(cf_frame, "Background:", "#0f0f0f", "bg")
-        create_color_row(cf_frame, "Robot Arm:", "#f4f4f4", "arm")
-        create_color_row(cf_frame, "Wrist:", "#ff5015", "wrist")
-        create_color_row(cf_frame, "End-Effector:", "#f4f4f4", "eef")
-        create_color_row(cf_frame, "Path Line:", "#159dff", "trace")
+        create_color_row(cf_frame, "Background:", config.COLOR_BG, "bg")
+        create_color_row(cf_frame, "Robot Arm:", config.COLOR_BASE, "arm")
+        create_color_row(cf_frame, "Wrist:", config.COLOR_WRIST, "wrist")
+        create_color_row(cf_frame, "End-Effector:", config.COLOR_EEF, "eef")
+        create_color_row(cf_frame, "Trace Line:", config.COLOR_PATH, "trace")
         
         ttk.Separator(cf_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
         
@@ -611,13 +644,13 @@ class ControlPanel(tk.Tk):
         trace_combo.pack(side=tk.LEFT, padx=5)
         trace_combo.bind("<<ComboboxSelected>>", change_trace_source)
 
-
-        # ROW 2: GHOST
-        ghost_row = ttk.LabelFrame(right_col, text="Visibility Settings")
-        ghost_row.pack(fill=tk.X, pady=5)
+        # ROW 2: Visibility settings
+        visibility_row = ttk.LabelFrame(right_col, text="Visibility Settings")
+        visibility_row.pack(fill=tk.X, pady=5)
 
         self.ghost_mode_var = tk.BooleanVar(value=False)
         self.ignore_eef_var = tk.BooleanVar(value=False)
+        self.collision_alert_var = tk.BooleanVar(value=True)
 
         def update_ghost_state():
             is_ghost = self.ghost_mode_var.get()
@@ -630,16 +663,18 @@ class ControlPanel(tk.Tk):
             else:
                 chk_ignore.state(["disabled"])
 
-        ttk.Checkbutton(ghost_row, text="Ghost Mode", 
+        ttk.Checkbutton(visibility_row, text="Ghost Mode", 
                         variable=self.ghost_mode_var, 
                         command=update_ghost_state).pack(side=tk.LEFT, padx=5)
 
-        chk_ignore = ttk.Checkbutton(ghost_row, text="Ignore Effector", 
+        chk_ignore = ttk.Checkbutton(visibility_row, text="Ignore Effector", 
                                      variable=self.ignore_eef_var, 
                                      command=update_ghost_state,
                                      state="disabled")
         chk_ignore.pack(side=tk.LEFT, padx=5)
 
+        ttk.Checkbutton(visibility_row, text="Collision Alerts", 
+                        variable=self.collision_alert_var).pack(side=tk.LEFT, padx=5)
 
         # COLUMN 3
         log_col = ttk.Frame(top_container)
@@ -804,10 +839,7 @@ class ControlPanel(tk.Tk):
 
     def _apply_color(self, target, color_str):
         success = self.viz.set_color(target, color_str)
-        if success:
-            self.ctx.log_queue.put(f"[UI] Color updated for '{target}' -> {color_str}")
-        else:
-            messagebox.showerror("Color Error", f"Invalid color code: {color_str}\nUse Hex (e.g. #FF0000) or names (red, blue).")
+        
     
     def _load_stl_history(self):
         self.stl_history = []

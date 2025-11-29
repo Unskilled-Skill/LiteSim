@@ -4,7 +4,7 @@ import os
 
 # --- APP INFO ---
 APP_NAME = "LiteSim"
-APP_VERSION = "1.9.9"
+APP_VERSION = "1.9.10"
 AUTHOR = "Dylan Kiesebrink"
 GITHUB_URL = "https://github.com/scoopy115/LiteSim"
 REPO_OWNER = "scoopy115"
@@ -24,6 +24,14 @@ JOINT_LIMITS = [
 ROBOT_Z_OFFSET = 0.0
 SIM_SPEED_FACTOR = 1.0 
 ROBOT_SCAN_PORT = 30002
+
+# --- COLORS ---
+COLOR_BG    = "#0E0E0E"
+COLOR_BASE  = "#f4f4f4"
+COLOR_WRIST = "#ff5015"
+COLOR_EEF   = "#f4f4f4"
+COLOR_PATH  = "#159dff"
+COLOR_COLLISION = "#ff0000"
 
 # --- GLOBAL API REFERENCE ---
 GLOBAL_API_INSTANCE = None 

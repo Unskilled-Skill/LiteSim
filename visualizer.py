@@ -26,10 +26,11 @@ class RobotVisualizer:
         self.trace_enabled = False
         self.trace_points = []    
         self.trace_actor = None   
-        self.trace_color = "#159dff"
+        self.trace_color = config.COLOR_PATH
         self.last_trace_pos = None
         self.trace_source = 'wrist' 
         self.eef_offset_z = 0.0     
+        self.is_in_collision_state = False
     
     def get_urdf_path(self):
         if not os.path.exists(config.MODEL_DIR):
@@ -56,7 +57,7 @@ class RobotVisualizer:
     def setup_scene(self):
         self.plotter = pv.Plotter(window_size=[config.WINDOW_WIDTH, config.WINDOW_HEIGHT], 
                                   title=f"{config.APP_NAME} {config.APP_VERSION} | UFACTORY Lite 6 Simulator | 3D View")
-        self.plotter.set_background("#0f0f0f")
+        self.plotter.set_background(config.COLOR_BG)
         self.plotter.enable_lightkit()
         urdf_path = self.get_urdf_path()
         if not urdf_path:
@@ -75,8 +76,8 @@ class RobotVisualizer:
             self.chain.active_links_mask = mask
         except: return None
 
-        # Base colours for the visualizer
-        colors = ["#f4f4f4", "#f4f4f4", "#f4f4f4", "#f4f4f4", "#f4f4f4", "#f4f4f4", "#ff5015", "#f4f4f4"]
+        # Base colors for the visualizer
+        colors = [config.COLOR_BASE] * 6 + [config.COLOR_WRIST, config.COLOR_EEF]
 
         print("-" * 30)
         for i, link in enumerate(self.chain.links):
@@ -223,33 +224,28 @@ class RobotVisualizer:
                     deg = self.current_joints[joint_idx]
                     target_vector[i] = math.radians(deg)
                     joint_idx += 1
+            
             matrices = self.chain.forward_kinematics(target_vector, full_kinematics=True)
             current_ee_pos = None
-            collision_detected = False
+            
+            current_collision = False
             COLLISION_THRESHOLD = 0.009 
+
             for i, matrix in enumerate(matrices):
-                
                 if i == len(matrices) - 1:
                     wrist_x = matrix[0, 3]
                     wrist_y = matrix[1, 3]
                     wrist_z = matrix[2, 3] + config.ROBOT_Z_OFFSET
-                    
-                    if wrist_z < COLLISION_THRESHOLD:
-                        collision_detected = True
+
+                    if wrist_z < COLLISION_THRESHOLD: current_collision = True
 
                     if 'tip' in self.trace_source.lower() and hasattr(self, 'eef_offset_z') and self.eef_offset_z > 0:
                         rot_matrix = matrix[:3, :3]
                         local_offset = np.array([0.0, 0.0, self.eef_offset_z])
                         world_offset = rot_matrix @ local_offset
+                        current_ee_pos = [wrist_x + world_offset[0], wrist_y + world_offset[1], wrist_z + world_offset[2]]
                         
-                        current_ee_pos = [
-                            wrist_x + world_offset[0],
-                            wrist_y + world_offset[1],
-                            wrist_z + world_offset[2]
-                        ]
-                        
-                        if current_ee_pos[2] < COLLISION_THRESHOLD:
-                            collision_detected = True
+                        if current_ee_pos[2] < COLLISION_THRESHOLD: current_collision = True
                     else:
                         current_ee_pos = [wrist_x, wrist_y, wrist_z]
 
@@ -260,43 +256,39 @@ class RobotVisualizer:
                         mat_copy[2, 3] += config.ROBOT_Z_OFFSET
                         actor.user_matrix = mat_copy 
             
-            if collision_detected:
-                self.set_color("arm", "#ff0000")
-                self.set_color("wrist", "#ff0000")
-                self.set_color("eef", "#ff0000")
+            if current_collision:
+                if not self.is_in_collision_state:
+                    self.set_color("arm", config.COLOR_COLLISION)
+                    self.set_color("wrist", config.COLOR_COLLISION)
+                    self.set_color("eef", config.COLOR_COLLISION)
+                    self.is_in_collision_state = True
+                
                 self.plotter.render()
                 return True 
 
+            else:
+                if self.is_in_collision_state:
+                    self.is_in_collision_state = False
+
             if self.trace_enabled and current_ee_pos:
                 should_add = False
-                if self.last_trace_pos is None: 
-                    should_add = True
+                if self.last_trace_pos is None: should_add = True
                 else:
                     dist = math.sqrt(sum([(a - b) ** 2 for a, b in zip(current_ee_pos, self.last_trace_pos)]))
                     if dist > 0.001: should_add = True
-                
                 if should_add:
                     self.trace_points.append(current_ee_pos)
                     self.last_trace_pos = current_ee_pos
-                    
                     if len(self.trace_points) > 1:
-                        if self.trace_actor: 
-                            self.plotter.remove_actor(self.trace_actor)
-                        
+                        if self.trace_actor: self.plotter.remove_actor(self.trace_actor)
                         points_array = np.array(self.trace_points)
                         line_mesh = pv.lines_from_points(points_array)
-                        self.trace_actor = self.plotter.add_mesh(
-                            line_mesh, 
-                            color=self.trace_color, 
-                            line_width=4, 
-                            reset_camera=False
-                        )
+                        self.trace_actor = self.plotter.add_mesh(line_mesh, color=self.trace_color, line_width=4, reset_camera=False)
             
             self.plotter.render() 
             return False
 
-        except Exception: 
-            return False
+        except Exception: return False
 
     def set_color(self, target, color_hex):
         if not self.plotter: return False
@@ -305,38 +297,21 @@ class RobotVisualizer:
             color_hex = f"#{color_hex}"
 
         try:
-            if target == 'bg':
-                self.plotter.set_background(color_hex)
-            
+            if target == 'bg': self.plotter.set_background(color_hex)
             elif target == 'arm':
-                # Base (0) - Joint 5 (5)
                 for i in range(6): 
-                    if i < len(self.link_map) and self.link_map[i]:
-                        self.link_map[i].prop.color = color_hex
-            
+                    if i < len(self.link_map) and self.link_map[i]: self.link_map[i].prop.color = color_hex
             elif target == 'wrist':
-                # Joint 6 / Flange
-                if len(self.link_map) > 6 and self.link_map[6]:
-                    self.link_map[6].prop.color = color_hex
-            
+                if len(self.link_map) > 6 and self.link_map[6]: self.link_map[6].prop.color = color_hex
             elif target == 'eef':
-                # End-effector actor
-                if self.ee_actor:
-                    self.ee_actor.prop.color = color_hex
-
+                if self.ee_actor: self.ee_actor.prop.color = color_hex
             elif target == 'trace':
                 self.trace_color = color_hex 
-                if self.trace_actor:
-                    self.trace_actor.prop.color = color_hex
+                if self.trace_actor: self.trace_actor.prop.color = color_hex
 
-            # Force render update
-            if target != 'bg':
-                self.plotter.render()
-            
+            if target != 'bg': self.plotter.render()
             return True
-        except Exception as e:
-            print(f"[VISUALIZER] Color error: {e}")
-            return False
+        except: return False
         
     def set_trace_enable(self, enable):
         self.trace_enabled = enable
