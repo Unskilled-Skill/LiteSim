@@ -51,7 +51,8 @@ class ControlPanel(tk.Tk):
         screen_w = self.winfo_screenwidth()
         screen_h = self.winfo_screenheight()
         ctrl_w = 800 
-        request_h = screen_h 
+        
+        request_h = (screen_h * 2) // 3 # Screen height = 2/3th of vertical space
         self.geometry(f"{ctrl_w}x{request_h}+0+0")
         
         self.minsize(800, 800)
