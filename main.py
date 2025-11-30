@@ -26,7 +26,7 @@ class SplashScreen(tk.Tk):
         
         bg_color = config.COLOR_BG
         fg_color = config.COLOR_BASE
-        accent_color = config.COLOR_PATH
+        accent_color = config.COLOR_WRIST
         self.configure(background=bg_color)
 
         # Splash UI
