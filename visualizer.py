@@ -11,6 +11,10 @@ try:
     # PyVista settings
     pv.global_theme.allow_empty_mesh = True
     from ikpy.chain import Chain
+    try:
+        from vtkmodules.tk.vtkTkRenderWindowInteractor import vtkTkRenderWindowInteractor
+    except Exception:
+        vtkTkRenderWindowInteractor = None
 except ImportError as e:
     print(f"CRITICAL: Module missing in Visualizer: {e}")
 
@@ -22,6 +26,9 @@ class RobotVisualizer:
         self.link_map = [] 
         self.plotter = None
         self.ee_actor = None
+        self.parent_frame = None
+        self.vtk_widget = None
+        self.external_plotter = False
 
         self.trace_enabled = False
         self.trace_points = []    
@@ -54,9 +61,15 @@ class RobotVisualizer:
         except Exception: pass
         return "link_base"
 
-    def setup_scene(self):
-        self.plotter = pv.Plotter(window_size=[config.WINDOW_WIDTH, config.WINDOW_HEIGHT], 
-                                  title=f"{config.APP_NAME} {config.APP_VERSION} | UFACTORY Lite 6 Simulator | 3D View")
+    def setup_scene(self, tk_parent=None, plotter_override=None):
+        self.parent_frame = tk_parent
+        if plotter_override is not None:
+            self.plotter = plotter_override
+            self.external_plotter = True
+        else:
+            self.plotter = pv.Plotter(window_size=[config.WINDOW_WIDTH, config.WINDOW_HEIGHT], 
+                                      title=f"{config.APP_NAME} {config.APP_VERSION} | UFACTORY Lite 6 Simulator | 3D View")
+            self.external_plotter = False
         self.plotter.set_background(config.COLOR_BG)
         self.plotter.enable_lightkit()
         urdf_path = self.get_urdf_path()
@@ -133,9 +146,80 @@ class RobotVisualizer:
         self.plotter.add_axes()
         self.plotter.view_isometric()
         self.plotter.enable_anti_aliasing()
-        
-        self.plotter.show(interactive_update=True, auto_close=False)
+
+        if self.parent_frame:
+            embedded = False
+            # Preferred: Tk interactor widget
+            if vtkTkRenderWindowInteractor:
+                try:
+                    self.parent_frame.update_idletasks()
+                    w = max(200, self.parent_frame.winfo_width())
+                    h = max(200, self.parent_frame.winfo_height())
+
+                    self.vtk_widget = vtkTkRenderWindowInteractor(
+                        master=self.parent_frame,
+                        rw=self.plotter.ren_win,
+                        width=w,
+                        height=h,
+                    )
+                    self.vtk_widget.pack(fill="both", expand=True)
+                    self.parent_frame.bind("<Configure>", self._on_parent_resize)
+
+                    # Bind renderer to the widget render window
+                    self.plotter.ren_win = self.vtk_widget.GetRenderWindow()
+                    try:
+                        self.plotter.renderer.SetRenderWindow(self.plotter.ren_win)
+                    except Exception:
+                        pass
+                    self.plotter.ren_win.AddRenderer(self.plotter.renderer)
+
+                    self.vtk_widget.Initialize()
+                    self.vtk_widget.Start()
+                    self.plotter.iren = self.vtk_widget.GetRenderWindow().GetInteractor()
+                    self._resize_to_parent()
+                    self.plotter.render()
+                    embedded = True
+                except Exception as e:
+                    print(f"[VISUALIZER] Tk interactor embed failed: {e}")
+
+            # Fallback: set the native window parent to the Tk frame and show once
+            if not embedded:
+                try:
+                    self.parent_frame.update_idletasks()
+                    parent_id = int(self.parent_frame.winfo_id())
+                    if hasattr(self.plotter, "ren_win"):
+                        self.plotter.ren_win.SetParentId(parent_id)
+                    self._resize_to_parent()
+                    self.parent_frame.bind("<Configure>", self._on_parent_resize)
+                    # show will reuse the parented window instead of creating a new top-level
+                    if not self.external_plotter:
+                        self.plotter.show(interactive_update=True, auto_close=False, interactive=False)
+                    embedded = True
+                except Exception as e:
+                    print(f"[VISUALIZER] ParentId embed failed: {e}")
+
+            if not embedded:
+                # Last resort
+                if not self.external_plotter:
+                    self.plotter.show(interactive_update=True, auto_close=False)
+        else:
+            if not self.external_plotter:
+                self.plotter.show(interactive_update=True, auto_close=False)
         return self.chain
+
+    def _resize_to_parent(self):
+        if not self.parent_frame or not self.plotter or not hasattr(self.plotter, "ren_win"):
+            return
+        try:
+            w = max(200, self.parent_frame.winfo_width())
+            h = max(200, self.parent_frame.winfo_height())
+            target = self.vtk_widget.GetRenderWindow() if self.vtk_widget else self.plotter.ren_win
+            target.SetSize(int(w), int(h))
+        except Exception as e:
+            print(f"[VISUALIZER] Resize error: {e}")
+
+    def _on_parent_resize(self, event):
+        self._resize_to_parent()
     
     def set_custom_gripper(self, stl_path, scale_to_meters=False):
         if not self.ee_actor:
@@ -214,7 +298,6 @@ class RobotVisualizer:
 
     def render_frame(self):
         if self.plotter is None or self.chain is None: return False
-        if not hasattr(self.plotter, 'ren_win') or self.plotter.ren_win is None: return False
 
         try:
             target_vector = [0.0] * len(self.chain.links)

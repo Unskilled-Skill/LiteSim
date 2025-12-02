@@ -1,6 +1,7 @@
 numpy
 pyvista
 pyvistaqt
+PyQt5
 ikpy
 xarm-python-sdk
 pyserial

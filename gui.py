@@ -63,7 +63,6 @@ class ControlPanel(tk.Tk):
 
         self.viz = RobotVisualizer()
         self.ik_chain = self.viz.setup_scene()
-        
         if not self.ik_chain:
             messagebox.showerror("Error", "Could not load URDF model.")
             self.destroy()
@@ -71,7 +70,7 @@ class ControlPanel(tk.Tk):
             
         # Init API
         self.api = SimXArmAPI(self.ctx, self.ik_chain)
-        
+
         self.script_history = []
         self.stl_history = []
         self.current_script_path = None
@@ -90,6 +89,7 @@ class ControlPanel(tk.Tk):
 
         self._start_update_check()
         self._build_ui()
+
         self._load_history()
         self._load_stl_history()
         
