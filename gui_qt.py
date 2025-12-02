@@ -8,6 +8,9 @@ import types
 import subprocess
 import socket
 from functools import partial
+import ast
+import json
+from datetime import datetime
 from PyQt5 import QtCore, QtWidgets, QtGui
 from pyvistaqt import QtInteractor
 
@@ -42,7 +45,7 @@ def apply_dark_palette(app: QtWidgets.QApplication):
         QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #f08c28; }
         QFrame, QSplitter { background: #242424; }
         QSplitter::handle { background: #2f2f2f; }
-        QPushButton { background-color: #2b2b2b; border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 10px; color: #e4e7ec; }
+        QPushButton { background-color: #2b2b2b; border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 12px; min-height: 28px; color: #e4e7ec; text-align: center; }
         QPushButton:hover { background-color: #333333; border-color: #f08c28; }
         QPushButton:pressed { background-color: #202020; border-color: #f08c28; }
         QPushButton:disabled { color: #6f7378; border-color: #2c2c2c; }
@@ -51,7 +54,8 @@ def apply_dark_palette(app: QtWidgets.QApplication):
         QSlider::groove:horizontal { height: 6px; background: #2c2c2c; border-radius: 3px; }
         QSlider::handle:horizontal { width: 14px; background: #f08c28; border: 1px solid #b96a1f; margin: -5px 0; border-radius: 7px; }
         QScrollBar { background: #1a1a1a; }
-        QScrollBar::handle { background: #2f2f2f; }
+        QScrollBar::handle { background: #3c3c3c; border-radius: 5px; }
+        QScrollBar::handle:hover { background: #505050; }
         QLabel { color: #dfe3e8; }
         QCheckBox { spacing: 6px; }
     """)
@@ -109,6 +113,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
         # Init API
         self.api = SimXArmAPI(self.ctx, self.ik_chain)
         self.api.speed_multiplier = self.speed_value
+        self.api.set_sim_only(True)
         # Stream listener state
         self.stream_host = "127.0.0.1"
         self.stream_port = 7777
@@ -184,6 +189,44 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QtWidgets.QVBoxLayout(central)
+
+        # Compact header actions (top-right)
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(4, 4, 4, 4)
+        header.setSpacing(8)
+        # Restart GUI (left-aligned)
+        btn_refresh_header = QtWidgets.QPushButton("Restart GUI")
+        btn_refresh_header.setToolTip("Restart the GUI (auto relaunches)")
+        btn_refresh_header.setFixedHeight(28)
+        btn_refresh_header.clicked.connect(self._refresh_gui)
+        header.addWidget(btn_refresh_header)
+
+        header.addStretch(1)
+
+        cam_buttons = [
+            ("Front", lambda: self.viz.set_camera_view('front', 1.6)),
+            ("Left", lambda: self.viz.set_camera_view('side-l', 1.6)),
+            ("Right", lambda: self.viz.set_camera_view('side-r', 1.6)),
+            ("Rear", lambda: self.viz.set_camera_view('rear', 1.6)),
+            ("Top", lambda: self.viz.set_camera_view('top', 1.6)),
+            ("Iso", self._reset_view),
+        ]
+        for text, fn in cam_buttons:
+            btn = QtWidgets.QPushButton(text)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(fn)
+            header.addWidget(btn)
+
+        btn_reset_view_global = QtWidgets.QPushButton("Reset View")
+        btn_reset_view_global.setFixedHeight(28)
+        btn_reset_view_global.clicked.connect(self._reset_view)
+        header.addWidget(btn_reset_view_global)
+        btn_reset_colors_global = QtWidgets.QPushButton("Reset Colors")
+        btn_reset_colors_global.setFixedHeight(28)
+        btn_reset_colors_global.clicked.connect(self._reset_all_colors)
+        header.addWidget(btn_reset_colors_global)
+        main_layout.addLayout(header)
+
         splitter = QtWidgets.QSplitter()
         splitter.setOrientation(QtCore.Qt.Horizontal)
         splitter.setHandleWidth(8)
@@ -209,19 +252,24 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.edit_robot_ip.setPlaceholderText("e.g. 192.168.1.208")
         conn_layout.addWidget(self.edit_robot_ip, 0, 1, 1, 2)
 
+        self.sim_only_chk = QtWidgets.QCheckBox("Sim-only (do not move real arm)")
+        self.sim_only_chk.setChecked(True)
+        self.sim_only_chk.stateChanged.connect(lambda _: self._toggle_sim_only(self.sim_only_chk.isChecked()))
+        conn_layout.addWidget(self.sim_only_chk, 1, 0, 1, 3)
+
         self.btn_connect_real = QtWidgets.QPushButton("Connect to Robot")
         self.btn_connect_real.clicked.connect(self._toggle_real_connection)
-        conn_layout.addWidget(self.btn_connect_real, 1, 0, 1, 2)
+        conn_layout.addWidget(self.btn_connect_real, 2, 0, 1, 2)
 
         self.btn_disconnect_real = QtWidgets.QPushButton("Disconnect")
         self.btn_disconnect_real.clicked.connect(self._disconnect_real_connection)
         self.btn_disconnect_real.setEnabled(False)
-        conn_layout.addWidget(self.btn_disconnect_real, 1, 2)
+        conn_layout.addWidget(self.btn_disconnect_real, 2, 2)
 
         self.lbl_conn_status = QtWidgets.QLabel("Status: Disconnected")
         self.lbl_conn_status.setAlignment(QtCore.Qt.AlignCenter)
         self.lbl_conn_status.setStyleSheet("color: #d9534f; font-weight: 600;")
-        conn_layout.addWidget(self.lbl_conn_status, 2, 0, 1, 3)
+        conn_layout.addWidget(self.lbl_conn_status, 3, 0, 1, 3)
 
         left_layout.addWidget(self._make_collapsible("Robot Connection", conn_group, expanded=False))
 
@@ -463,24 +511,6 @@ class QtControlPanel(QtWidgets.QMainWindow):
         ef_layout.addLayout(preset_row)
         left_layout.addWidget(self._make_collapsible("End-Effector Configuration", ef_group, expanded=False))
 
-        # Camera controls
-        cam_group = QtWidgets.QGroupBox("Camera Controls")
-        cam_group.setTitle("")
-        cam_layout = QtWidgets.QGridLayout(cam_group)
-        cam_buttons = [
-            ("Front", lambda: self.viz.set_camera_view('front', 1.6)),
-            ("Left", lambda: self.viz.set_camera_view('side-l', 1.6)),
-            ("Right", lambda: self.viz.set_camera_view('side-r', 1.6)),
-            ("Rear", lambda: self.viz.set_camera_view('rear', 1.6)),
-            ("Top", lambda: self.viz.set_camera_view('top', 1.6)),
-            ("Iso", self._reset_view),
-        ]
-        for col, (text, fn) in enumerate(cam_buttons):
-            btn = QtWidgets.QPushButton(text)
-            btn.clicked.connect(fn)
-            cam_layout.addWidget(btn, 0, col)
-        left_layout.addWidget(self._make_collapsible("Camera Controls", cam_group, expanded=False))
-
         left_layout.addStretch(1)
         left_container = QtWidgets.QWidget()
         left_container.setLayout(left_layout)
@@ -495,11 +525,11 @@ class QtControlPanel(QtWidgets.QMainWindow):
             QScrollArea > QWidget > QWidget { background: #242424; }
             QScrollBar:vertical {
                 background: transparent;
-                width: 10px;
+                width: 9px;
                 margin: 4px 0 4px 0;
             }
             QScrollBar::handle:vertical {
-                background: #3a3a3a;
+                background: #454545;
                 min-height: 24px;
                 border-radius: 5px;
             }
@@ -540,15 +570,6 @@ class QtControlPanel(QtWidgets.QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 1000])
         right_split.setSizes([750, 200])
-
-        # Footer utility bar with restart button (least intrusive)
-        footer = QtWidgets.QHBoxLayout()
-        footer.addStretch(1)
-        self.btn_refresh = QtWidgets.QPushButton("Restart GUI")
-        self.btn_refresh.setToolTip("Restart the GUI (auto relaunches)")
-        self.btn_refresh.clicked.connect(self._refresh_gui)
-        footer.addWidget(self.btn_refresh)
-        main_layout.addLayout(footer)
 
     # ---------- History helpers ----------
     def _load_history(self):
@@ -692,6 +713,19 @@ class QtControlPanel(QtWidgets.QMainWindow):
         if self.viz:
             self.viz.reset_camera_view()
 
+    def _reset_all_colors(self):
+        defaults = {
+            "bg": config.COLOR_BG,
+            "arm": config.COLOR_BASE,
+            "wrist": config.COLOR_WRIST,
+            "eef": config.COLOR_EEF,
+            "trace": config.COLOR_PATH,
+        }
+        for key, val in defaults.items():
+            if key in self.color_inputs:
+                self.color_inputs[key].setText(val)
+                self._apply_color(key)
+
     def _refresh_gui(self):
         script_path = os.path.abspath(sys.argv[0])
         cmd = [sys.executable, script_path]
@@ -700,6 +734,82 @@ class QtControlPanel(QtWidgets.QMainWindow):
         except Exception:
             pass
         QtWidgets.QApplication.quit()
+
+    def _preflight_script(self, path):
+        """Static check for obvious out-of-limit commands in a script."""
+        warnings = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                src = f.read()
+            tree = ast.parse(src, filename=path)
+        except Exception as e:
+            self._append_log(f"[SAFEGUARD] Preflight skipped: {e}")
+            return warnings
+
+        joint_limits = getattr(config, "JOINT_LIMITS", [])
+        max_joint_speed = getattr(config, "JOINT_SPEED_LIMIT_DEG_S", None)
+        max_joint_acc = getattr(config, "JOINT_ACC_LIMIT_DEG_S2", None)
+        max_tcp_speed = getattr(config, "TCP_SPEED_LIMIT_MM_S", None)
+        max_tcp_acc = getattr(config, "TCP_ACC_LIMIT_MM_S2", None)
+
+        def eval_num(node):
+            if isinstance(node, (ast.Num, ast.Constant)) and isinstance(node.value, (int, float)):
+                return float(node.value)
+            return None
+
+        def eval_list(node):
+            if isinstance(node, (ast.List, ast.Tuple)):
+                vals = []
+                for el in node.elts:
+                    v = eval_num(el)
+                    if v is None:
+                        return None
+                    vals.append(v)
+                return vals
+            return None
+
+        class Checker(ast.NodeVisitor):
+            def visit_Call(self, node):
+                func_name = ""
+                if isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+                elif isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                if func_name in ("set_servo_angle", "set_position"):
+                    self.check_call(func_name, node)
+                self.generic_visit(node)
+
+            def check_call(self, name, node):
+                # positional args
+                args = list(node.args)
+                kwargs = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+                if name == "set_servo_angle":
+                    angles_node = kwargs.get("angle") or (args[0] if args else None)
+                    angles = eval_list(angles_node) if angles_node is not None else None
+                    speed = eval_num(kwargs.get("speed") or (args[1] if len(args) > 1 else None))
+                    acc = eval_num(kwargs.get("mvacc") or (args[2] if len(args) > 2 else None))
+
+                    if angles:
+                        for idx, val in enumerate(angles):
+                            if idx < len(joint_limits):
+                                lo, hi = joint_limits[idx]
+                                if val < lo or val > hi:
+                                    warnings.append(f"Joint {idx+1} target {val} deg outside limits [{lo}, {hi}]")
+                    if speed and max_joint_speed and speed > max_joint_speed:
+                        warnings.append(f"Joint speed {speed} deg/s exceeds limit {max_joint_speed}")
+                    if acc and max_joint_acc and acc > max_joint_acc:
+                        warnings.append(f"Joint acc {acc} deg/s^2 exceeds limit {max_joint_acc}")
+
+                if name == "set_position":
+                    speed = eval_num(kwargs.get("speed") or (args[6] if len(args) > 6 else None))
+                    acc = eval_num(kwargs.get("acc"))
+                    if speed and max_tcp_speed and speed > max_tcp_speed:
+                        warnings.append(f"TCP speed {speed} mm/s exceeds limit {max_tcp_speed}")
+                    if acc and max_tcp_acc and acc > max_tcp_acc:
+                        warnings.append(f"TCP acc {acc} mm/s^2 exceeds limit {max_tcp_acc}")
+
+        Checker().visit(tree)
+        return warnings
     def _browse_script(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select script", os.getcwd(), "Python Files (*.py)")
         if path:
@@ -711,6 +821,23 @@ class QtControlPanel(QtWidgets.QMainWindow):
     def _run_current_script(self):
         if not self.current_script_path or self.running_script:
             return
+        # Preflight analysis for unsafe speeds/limits
+        warnings = self._preflight_script(self.current_script_path)
+        if warnings:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setIcon(QtWidgets.QMessageBox.Warning)
+            msg.setWindowTitle("Preflight Warnings")
+            msg.setText("Potential unsafe commands detected in the script.")
+            msg.setInformativeText("Continue anyway?")
+            msg.setDetailedText("\n".join(warnings))
+            msg.setStandardButtons(QtWidgets.QMessageBox.Cancel | QtWidgets.QMessageBox.Ok)
+            msg.setDefaultButton(QtWidgets.QMessageBox.Cancel)
+            choice = msg.exec_()
+            if choice != QtWidgets.QMessageBox.Ok:
+                self._append_log("[SAFEGUARD] Run cancelled due to preflight warnings.")
+                return
+            else:
+                self._append_log("[SAFEGUARD] Proceeding despite warnings.")
         self.collision_popup_shown = False
         self.running_script = True
         self._toggle_controls(running=True)
@@ -1124,12 +1251,59 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.ctx.paused = True
         self.running_script = False
         self._toggle_controls(running=False)
-        self._append_log("[ALERT] COLLISION DETECTED! Robot hit the floor. Simulation halted.")
-        QtWidgets.QMessageBox.critical(
-            self,
-            "COLLISION DETECTED",
-            "The robot hit the floor. Simulation halted.\nUse Reset to Home when you're ready."
-        )
+        self._append_log("[ALERT] COLLISION DETECTED! Simulation halted.")
+
+        msg = QtWidgets.QMessageBox(self)
+        msg.setIcon(QtWidgets.QMessageBox.Critical)
+        msg.setWindowTitle("Collision Detected")
+        msg.setText("The robot hit the floor. Simulation halted.")
+        msg.setInformativeText("Choose an action:")
+        btn_resume = msg.addButton("Resume", QtWidgets.QMessageBox.AcceptRole)
+        btn_reset = msg.addButton("Reset to Home", QtWidgets.QMessageBox.DestructiveRole)
+        btn_snapshot = msg.addButton("Save Snapshot", QtWidgets.QMessageBox.ActionRole)
+        msg.setDefaultButton(btn_reset)
+        msg.exec_()
+
+        clicked = msg.clickedButton()
+        if clicked == btn_snapshot:
+            path = self._save_collision_snapshot()
+            if path:
+                self._append_log(f"[ALERT] Snapshot saved: {os.path.basename(path)}")
+            # remain halted but clear popup flag so user can choose again if needed
+            self.collision_popup_shown = False
+            return
+
+        if clicked == btn_reset:
+            self._home()
+        # Resume: clear pause/stop flags (script remains stopped; user can restart)
+        self.ctx.stop_flag = False
+        self.ctx.paused = False
+        self.collision_popup_shown = False
+    def _toggle_sim_only(self, enabled):
+        if hasattr(self, "api"):
+            try:
+                self.api.set_sim_only(enabled)
+            except Exception:
+                pass
+
+    def _save_collision_snapshot(self):
+        """Save current joint state (and minimal context) to a JSON file."""
+        try:
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            fname = f"collision_snapshot_{ts}.json"
+            path = os.path.join(config.USER_DATA_DIR, fname)
+            payload = {
+                "timestamp_utc": ts,
+                "joints_deg": list(getattr(self.api, "joints_deg", [])),
+                "trace_source": getattr(self.viz, "trace_source", None),
+                "loop_enabled": self.loop_enabled,
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            return path
+        except Exception as e:
+            self._append_log(f"[ALERT] Failed to save snapshot: {e}")
+            return None
 
     def _resume_from_crash(self):
         self.ctx.paused = False
@@ -1187,6 +1361,11 @@ class QtControlPanel(QtWidgets.QMainWindow):
                         self.btn_connect_real.setText("Connect to Robot")
                         self.btn_disconnect_real.setEnabled(False)
                         self.edit_robot_ip.setEnabled(True)
+                # keep sim-only checkbox reflecting API
+                if hasattr(self, "sim_only_chk"):
+                    self.sim_only_chk.blockSignals(True)
+                    self.sim_only_chk.setChecked(getattr(self.api, "sim_only_mode", True))
+                    self.sim_only_chk.blockSignals(False)
 
     # Final override to keep collapsible headers plain (no state styling)
     def _make_collapsible_old2(self, title, content_widget, expanded=True):
