@@ -6,6 +6,7 @@ import queue
 import runpy
 import types
 import subprocess
+import socket
 from functools import partial
 from PyQt5 import QtCore, QtWidgets, QtGui
 from pyvistaqt import QtInteractor
@@ -91,11 +92,13 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.loop_enabled = False
         self.speed_value = 1.0
         self.scale_mm = True
-
+        self.collision_popup_shown = False
         self.script_history = []
         self.stl_history = []
+        self._ip_store_path = os.path.join(config.USER_DATA_DIR, "robot_ip.txt")
 
         self._build_ui()
+        self._load_saved_ip()
 
         # Create the scene using the Qt interactor as the plotter backend
         self.ik_chain = self.viz.setup_scene(plotter_override=self.viz_widget)
@@ -106,6 +109,13 @@ class QtControlPanel(QtWidgets.QMainWindow):
         # Init API
         self.api = SimXArmAPI(self.ctx, self.ik_chain)
         self.api.speed_multiplier = self.speed_value
+        # Stream listener state
+        self.stream_host = "127.0.0.1"
+        self.stream_port = 7777
+        self.stream_status_state = "off"
+
+        # Try to auto-connect to real robot if IP was saved and SDK available
+        self._auto_connect_saved_ip()
 
         self._load_history()
         self._load_stl_history()
@@ -120,7 +130,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.queue_timer.timeout.connect(self._process_queues)
         self.queue_timer.start(30)
 
-    def _make_collapsible(self, title, content_widget, expanded=True):
+    def _make_collapsible_old(self, title, content_widget, expanded=True):
         """Return a small collapsible container with a toggle header and the given content."""
         container = QtWidgets.QWidget()
         vbox = QtWidgets.QVBoxLayout(container)
@@ -186,23 +196,69 @@ class QtControlPanel(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(10, 10, 16, 10)
         left_layout.setSpacing(12)
 
+        # Robot connection (real Lite 6)
+        conn_group = QtWidgets.QGroupBox("Robot Connection")
+        conn_group.setTitle("")
+        conn_layout = QtWidgets.QGridLayout(conn_group)
+        conn_layout.setContentsMargins(6, 6, 6, 6)
+        conn_layout.setHorizontalSpacing(8)
+        conn_layout.setVerticalSpacing(6)
+
+        conn_layout.addWidget(QtWidgets.QLabel("Robot IP:"), 0, 0)
+        self.edit_robot_ip = QtWidgets.QLineEdit("192.168.1.xxx")
+        self.edit_robot_ip.setPlaceholderText("e.g. 192.168.1.208")
+        conn_layout.addWidget(self.edit_robot_ip, 0, 1, 1, 2)
+
+        self.btn_connect_real = QtWidgets.QPushButton("Connect to Robot")
+        self.btn_connect_real.clicked.connect(self._toggle_real_connection)
+        conn_layout.addWidget(self.btn_connect_real, 1, 0, 1, 2)
+
+        self.btn_disconnect_real = QtWidgets.QPushButton("Disconnect")
+        self.btn_disconnect_real.clicked.connect(self._disconnect_real_connection)
+        self.btn_disconnect_real.setEnabled(False)
+        conn_layout.addWidget(self.btn_disconnect_real, 1, 2)
+
+        self.lbl_conn_status = QtWidgets.QLabel("Status: Disconnected")
+        self.lbl_conn_status.setAlignment(QtCore.Qt.AlignCenter)
+        self.lbl_conn_status.setStyleSheet("color: #d9534f; font-weight: 600;")
+        conn_layout.addWidget(self.lbl_conn_status, 2, 0, 1, 3)
+
+        left_layout.addWidget(self._make_collapsible("Robot Connection", conn_group, expanded=False))
+
         # Script loading/history (top priority)
         script_group = QtWidgets.QGroupBox("Script Loading")
-        sg_layout = QtWidgets.QHBoxLayout(script_group)
+        sg_layout = QtWidgets.QGridLayout(script_group)
+        sg_layout.setContentsMargins(6, 6, 6, 6)
+        sg_layout.setHorizontalSpacing(8)
+        sg_layout.setVerticalSpacing(4)
         self.combo_history = QtWidgets.QComboBox()
-        self.combo_history.setMinimumWidth(220)
+        self.combo_history.setMinimumWidth(200)
         self.combo_history.currentIndexChanged.connect(self._on_history_select)
-        sg_layout.addWidget(self.combo_history, 1)
-        self.btn_browse = QtWidgets.QPushButton("Load .py script...")
-        self.btn_browse.setMinimumWidth(140)
+        sg_layout.addWidget(self.combo_history, 0, 0, 1, 2)
+
+        self.btn_browse = QtWidgets.QPushButton("Load")
+        self.btn_browse.setMinimumWidth(100)
         self.btn_browse.clicked.connect(self._browse_script)
-        sg_layout.addWidget(self.btn_browse)
+        sg_layout.addWidget(self.btn_browse, 0, 2)
+
         self.btn_refresh_scripts = QtWidgets.QPushButton("Refresh")
         self.btn_refresh_scripts.setToolTip("Reload recent + examples")
-        self.btn_refresh_scripts.setMinimumWidth(90)
+        self.btn_refresh_scripts.setMinimumWidth(80)
         self.btn_refresh_scripts.clicked.connect(self._load_history)
-        sg_layout.addWidget(self.btn_refresh_scripts)
-        sg_layout.addStretch(1)
+        sg_layout.addWidget(self.btn_refresh_scripts, 0, 3)
+
+        self.btn_stream_toggle = QtWidgets.QPushButton("Start Live Stream")
+        self.btn_stream_toggle.setMinimumWidth(120)
+        self.btn_stream_toggle.setCheckable(True)
+        self.btn_stream_toggle.setChecked(False)
+        self.btn_stream_toggle.clicked.connect(self._toggle_stream_listener)
+        sg_layout.addWidget(self.btn_stream_toggle, 1, 0, 1, 2)
+
+        self.lbl_stream_status = QtWidgets.QLabel("Stream: Off")
+        self.lbl_stream_status.setStyleSheet("color: #d9534f;")
+        self.lbl_stream_status.setAlignment(QtCore.Qt.AlignCenter)
+        sg_layout.addWidget(self.lbl_stream_status, 1, 2, 1, 2)
+
         left_layout.addWidget(script_group)
 
         # Simulation controls
@@ -258,8 +314,10 @@ class QtControlPanel(QtWidgets.QMainWindow):
             row.addWidget(spin)
 
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-            slider.setMinimum(config.JOINT_LIMITS[i][0] * 10)
-            slider.setMaximum(config.JOINT_LIMITS[i][1] * 10)
+            min_lim = int(config.JOINT_LIMITS[i][0] * 10)
+            max_lim = int(config.JOINT_LIMITS[i][1] * 10)
+            slider.setMinimum(min_lim)
+            slider.setMaximum(max_lim)
             slider.setValue(0)
             self.joint_sliders.append(slider)
             row.addWidget(slider, 1)
@@ -306,15 +364,15 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.collision_alert_chk.setChecked(True)
         tr_layout.addWidget(self.collision_alert_chk, 1, 2, 1, 1)
         tr_layout.setColumnStretch(3, 1)
-        left_layout.addWidget(self._make_collapsible("Trace & Visibility", trace_group, expanded=True))
+        left_layout.addWidget(self._make_collapsible("Trace & Visibility", trace_group, expanded=False))
 
         # Color settings (single column, scroll-friendly)
         color_group = QtWidgets.QGroupBox("Color Settings")
         color_group.setTitle("")
         cg_layout = QtWidgets.QGridLayout(color_group)
         cg_layout.setContentsMargins(10, 8, 10, 8)
-        cg_layout.setHorizontalSpacing(10)
-        cg_layout.setVerticalSpacing(8)
+        cg_layout.setHorizontalSpacing(8)
+        cg_layout.setVerticalSpacing(6)
         self.color_inputs = {}
         self.color_previews = {}
         labels = [("Background", "bg"), ("Robot Arm", "arm"), ("Wrist", "wrist"), ("End-Effector", "eef"), ("Trace", "trace")]
@@ -334,15 +392,15 @@ class QtControlPanel(QtWidgets.QMainWindow):
             cg_layout.addWidget(preview, idx, 2)
 
             btn_apply = QtWidgets.QPushButton("Apply")
-            btn_apply.setMinimumWidth(110)
-            btn_apply.setMinimumHeight(28)
+            btn_apply.setMinimumWidth(90)
+            btn_apply.setMinimumHeight(26)
             btn_apply.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             btn_apply.clicked.connect(lambda _, k=key: self._apply_color(k))
             cg_layout.addWidget(btn_apply, idx, 3)
 
             btn_reset = QtWidgets.QPushButton("Reset")
-            btn_reset.setMinimumWidth(110)
-            btn_reset.setMinimumHeight(28)
+            btn_reset.setMinimumWidth(90)
+            btn_reset.setMinimumHeight(26)
             btn_reset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             btn_reset.clicked.connect(lambda _, k=key: self._reset_color(k))
             cg_layout.addWidget(btn_reset, idx, 4)
@@ -351,22 +409,22 @@ class QtControlPanel(QtWidgets.QMainWindow):
             self._update_color_preview(key, self.color_vars[key])
 
         preset_row = QtWidgets.QHBoxLayout()
-        preset_row.setContentsMargins(0, 8, 0, 0)
-        preset_row.setSpacing(8)
+        preset_row.setContentsMargins(0, 6, 0, 0)
+        preset_row.setSpacing(6)
         preset_row.addWidget(QtWidgets.QLabel("Preset:"))
         self.combo_color_presets = QtWidgets.QComboBox()
-        self.combo_color_presets.setMinimumWidth(180)
+        self.combo_color_presets.setMinimumWidth(160)
         self.combo_color_presets.addItem("Default")
         self.combo_color_presets.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         preset_row.addWidget(self.combo_color_presets, 1)
         self.btn_save_preset = QtWidgets.QPushButton("Save Current")
-        self.btn_save_preset.setMinimumWidth(120)
-        self.btn_save_preset.setMinimumHeight(28)
+        self.btn_save_preset.setMinimumWidth(110)
+        self.btn_save_preset.setMinimumHeight(26)
         self.btn_save_preset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         preset_row.addWidget(self.btn_save_preset)
         self.btn_load_preset = QtWidgets.QPushButton("Load")
-        self.btn_load_preset.setMinimumWidth(90)
-        self.btn_load_preset.setMinimumHeight(28)
+        self.btn_load_preset.setMinimumWidth(80)
+        self.btn_load_preset.setMinimumHeight(26)
         self.btn_load_preset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         preset_row.addWidget(self.btn_load_preset)
         preset_row.addStretch(1)
@@ -374,7 +432,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
 
         cg_layout.setColumnStretch(1, 1)
         color_group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
-        left_layout.addWidget(self._make_collapsible("Color Settings", color_group, expanded=True))
+        left_layout.addWidget(self._make_collapsible("Color Settings", color_group, expanded=False))
 
         # End effector config
         ef_group = QtWidgets.QGroupBox("End-Effector Configuration")
@@ -403,7 +461,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.btn_preset_remove.clicked.connect(self._remove_gripper)
         preset_row.addWidget(self.btn_preset_remove)
         ef_layout.addLayout(preset_row)
-        left_layout.addWidget(self._make_collapsible("End-Effector Configuration", ef_group, expanded=True))
+        left_layout.addWidget(self._make_collapsible("End-Effector Configuration", ef_group, expanded=False))
 
         # Camera controls
         cam_group = QtWidgets.QGroupBox("Camera Controls")
@@ -421,7 +479,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
             btn = QtWidgets.QPushButton(text)
             btn.clicked.connect(fn)
             cam_layout.addWidget(btn, 0, col)
-        left_layout.addWidget(self._make_collapsible("Camera Controls", cam_group, expanded=True))
+        left_layout.addWidget(self._make_collapsible("Camera Controls", cam_group, expanded=False))
 
         left_layout.addStretch(1)
         left_container = QtWidgets.QWidget()
@@ -615,6 +673,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
 
     def _home(self):
         self.ctx.log_queue.put("[GUI] Going home...")
+        self.collision_popup_shown = False
         with self.data_lock:
             zeros = [0.0] * config.JOINT_COUNT
             for spin, slider in zip(self.joint_spin, self.joint_sliders):
@@ -652,6 +711,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
     def _run_current_script(self):
         if not self.current_script_path or self.running_script:
             return
+        self.collision_popup_shown = False
         self.running_script = True
         self._toggle_controls(running=True)
         self.ctx.stop_flag = False
@@ -694,6 +754,154 @@ class QtControlPanel(QtWidgets.QMainWindow):
         mode = self.trace_mode.currentText().lower()
         self.viz.trace_source = mode
         self.viz.clear_trace()
+
+    def _toggle_stream_listener(self):
+        if not self.btn_stream_toggle.isChecked():
+            # Stop
+            self.btn_stream_toggle.setText("Start Live Stream")
+            self.btn_stream_toggle.setChecked(False)
+            self._set_stream_status("off")
+            try:
+                self.api.stop_joint_stream_listener()
+            except Exception:
+                pass
+            return
+        # Start
+        try:
+            self.api.start_joint_stream_listener(host=self.stream_host, port=self.stream_port)
+            self.btn_stream_toggle.setText("Stop Live Stream")
+            self._set_stream_status("listening")
+        except Exception as e:
+            self.btn_stream_toggle.setChecked(False)
+            self._set_stream_status("off")
+            self._append_log(f"[STREAM] Failed to start: {e}")
+
+    def _set_stream_status(self, state):
+        if state == self.stream_status_state:
+            return
+        self.stream_status_state = state
+        if state == "connected":
+            self.lbl_stream_status.setText("Stream: Connected")
+            self.lbl_stream_status.setStyleSheet("color: #5cb85c;")  # green
+        elif state == "listening":
+            self.lbl_stream_status.setText("Stream: Listening")
+            self.lbl_stream_status.setStyleSheet("color: #f0ad4e;")  # amber
+        else:
+            self.lbl_stream_status.setText("Stream: Off")
+            self.lbl_stream_status.setStyleSheet("color: #d9534f;")  # red
+
+    # --- Real robot connection ---
+    def _toggle_real_connection(self):
+        if self.api and self.api.is_connected:
+            self._disconnect_real_connection()
+            return
+        ip = self.edit_robot_ip.text().strip()
+        if not ip:
+            QtWidgets.QMessageBox.warning(self, "Robot IP", "Please enter the robot IP address.")
+            return
+        self.btn_connect_real.setEnabled(False)
+        self.btn_disconnect_real.setEnabled(False)
+        self.edit_robot_ip.setEnabled(False)
+        self.btn_connect_real.setText("Connecting...")
+        self._set_connection_status("connecting")
+        threading.Thread(target=self._connect_real_thread, args=(ip, False), daemon=True).start()
+
+    def _connect_real_thread(self, ip, from_auto=False):
+        success, msg = self.api.connect_real_robot(ip)
+        QtCore.QTimer.singleShot(0, lambda s=success, m=msg, a=from_auto: self._finish_real_connect(s, m, a))
+
+    def _finish_real_connect(self, success, msg, from_auto=False):
+        if success:
+            self._save_ip(self.edit_robot_ip.text())
+            self._set_connection_status("connected")
+            self.btn_connect_real.setText("Disconnect")
+            self.btn_disconnect_real.setEnabled(True)
+            self.edit_robot_ip.setEnabled(False)
+        else:
+            if not from_auto:
+                QtWidgets.QMessageBox.warning(self, "Connection Failed", f"Could not connect:\n{msg}")
+            else:
+                self._append_log(f"[REAL] Auto-connect failed: {msg}")
+            self._set_connection_status("disconnected")
+            self.btn_connect_real.setText("Connect to Robot")
+            self.edit_robot_ip.setEnabled(True)
+            self.btn_disconnect_real.setEnabled(False)
+        self.btn_connect_real.setEnabled(True)
+
+    def _disconnect_real_connection(self):
+        try:
+            self.api.disconnect_real_robot()
+        except Exception:
+            pass
+        self._save_ip(self.edit_robot_ip.text())
+        self._set_connection_status("disconnected")
+        self.btn_connect_real.setText("Connect to Robot")
+        self.btn_connect_real.setEnabled(True)
+        self.edit_robot_ip.setEnabled(True)
+        self.btn_disconnect_real.setEnabled(False)
+
+    def _set_connection_status(self, state):
+        if not hasattr(self, "lbl_conn_status"):
+            return
+        if state == "connected":
+            text = "Status: Connected"
+            color = "#5cb85c"
+        elif state == "connecting":
+            text = "Status: Connecting..."
+            color = "#f0ad4e"
+        else:
+            text = "Status: Disconnected"
+            color = "#d9534f"
+        self.lbl_conn_status.setText(text)
+        self.lbl_conn_status.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def _auto_connect_saved_ip(self):
+        """Attempt auto-connect using saved IP if SDK is available."""
+        if not getattr(config, "HAS_REAL_SDK", False):
+            return
+        ip = ""
+        try:
+            ip = self.edit_robot_ip.text().strip()
+        except Exception:
+            return
+        if not ip:
+            return
+        # Quick port probe to avoid hanging when nothing is reachable
+        try:
+            with socket.create_connection((ip, config.ROBOT_SCAN_PORT), timeout=1.0):
+                pass
+        except Exception:
+            self._append_log(f"[REAL] Auto-connect skipped (no robot at {ip})")
+            self._set_connection_status("disconnected")
+            self.btn_connect_real.setText("Connect to Robot")
+            self.btn_connect_real.setEnabled(True)
+            self.edit_robot_ip.setEnabled(True)
+            self.btn_disconnect_real.setEnabled(False)
+            return
+        # mimic button state for connect
+        self.btn_connect_real.setEnabled(False)
+        self.btn_disconnect_real.setEnabled(False)
+        self.edit_robot_ip.setEnabled(False)
+        self.btn_connect_real.setText("Connecting...")
+        self._set_connection_status("connecting")
+        threading.Thread(target=self._connect_real_thread, args=(ip, True), daemon=True).start()
+
+    def _load_saved_ip(self):
+        try:
+            if os.path.exists(self._ip_store_path):
+                with open(self._ip_store_path, "r", encoding="utf-8") as f:
+                    saved_ip = f.read().strip()
+                    if saved_ip:
+                        self.edit_robot_ip.setText(saved_ip)
+        except Exception:
+            pass
+
+    def _save_ip(self, ip_text):
+        try:
+            with open(self._ip_store_path, "w", encoding="utf-8") as f:
+                f.write(ip_text.strip())
+        except Exception:
+            pass
 
     def _apply_ghost_state(self, *_):
         is_ghost = self.ghost_chk.isChecked()
@@ -903,16 +1111,25 @@ class QtControlPanel(QtWidgets.QMainWindow):
             pass
 
     def _handle_collision(self):
+        # Prevent repeated popups; still halt everything
+        if self.collision_popup_shown:
+            self.ctx.stop_flag = True
+            self.ctx.paused = True
+            self.running_script = False
+            self._toggle_controls(running=False)
+            return
+        self.collision_popup_shown = True
+        # Halt everything but keep current pose so the user can inspect before deciding to reset
         self.ctx.stop_flag = True
         self.ctx.paused = True
-        self._append_log("[ALERT] COLLISION DETECTED! Robot hit the floor.")
-        QtWidgets.QMessageBox.critical(self, "COLLISION DETECTED", "The robot hit the floor. Simulation paused.\nClick OK to reset to Home.")
-        self._stop_script()
-        self._home()
-        for key, val in self.color_vars.items():
-            if key in ["arm", "wrist", "eef"]:
-                self.viz.set_color(key, val)
-        QtCore.QTimer.singleShot(200, self._resume_from_crash)
+        self.running_script = False
+        self._toggle_controls(running=False)
+        self._append_log("[ALERT] COLLISION DETECTED! Robot hit the floor. Simulation halted.")
+        QtWidgets.QMessageBox.critical(
+            self,
+            "COLLISION DETECTED",
+            "The robot hit the floor. Simulation halted.\nUse Reset to Home when you're ready."
+        )
 
     def _resume_from_crash(self):
         self.ctx.paused = False
@@ -950,8 +1167,29 @@ class QtControlPanel(QtWidgets.QMainWindow):
                     self.joint_sliders[idx].setValue(int(val * 10))
                     self.joint_sliders[idx].blockSignals(False)
 
+        # Update stream status indicator based on API flags
+        if hasattr(self, "api"):
+            new_state = "off"
+            if getattr(self.api, "stream_running", False):
+                new_state = "connected" if getattr(self.api, "stream_connected", False) else "listening"
+            self._set_stream_status(new_state)
+
+            # Update real-robot connection indicator
+            if hasattr(self, "btn_connect_real") and hasattr(self, "edit_robot_ip"):
+                if getattr(self.api, "is_connected", False):
+                    self._set_connection_status("connected")
+                    self.btn_connect_real.setText("Disconnect")
+                    self.btn_disconnect_real.setEnabled(True)
+                    self.edit_robot_ip.setEnabled(False)
+                else:
+                    if not self.btn_connect_real.text().startswith("Connecting"):
+                        self._set_connection_status("disconnected")
+                        self.btn_connect_real.setText("Connect to Robot")
+                        self.btn_disconnect_real.setEnabled(False)
+                        self.edit_robot_ip.setEnabled(True)
+
     # Final override to keep collapsible headers plain (no state styling)
-    def _make_collapsible(self, title, content_widget, expanded=True):
+    def _make_collapsible_old2(self, title, content_widget, expanded=True):
         container = QtWidgets.QWidget()
         vbox = QtWidgets.QVBoxLayout(container)
         vbox.setContentsMargins(0, 0, 0, 0)
@@ -999,6 +1237,61 @@ class QtControlPanel(QtWidgets.QMainWindow):
             state["open"] = not state["open"]
             frame.setVisible(state["open"])
             toggle.setText((f"{arrow_open}  " if state["open"] else f"{arrow_closed}  ") + title)
+
+        toggle.clicked.connect(on_click)
+        frame.setVisible(expanded)
+        return container
+
+
+    # Override collapsible header to use ASCII arrows and neutral hover
+    def _make_collapsible(self, title, content_widget, expanded=True):
+        container = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+
+        arrow_open = "v"
+        arrow_closed = ">"
+        toggle = QtWidgets.QPushButton((f"{arrow_open} " if expanded else f"{arrow_closed} ") + title)
+        toggle.setObjectName("CollapseHeader")
+        toggle.setFlat(True)
+        toggle.setCheckable(False)
+        toggle.setAutoDefault(False)
+        toggle.setDefault(False)
+        toggle.setFocusPolicy(QtCore.Qt.NoFocus)
+        toggle.setStyleSheet("""
+            QPushButton#CollapseHeader {
+                border: none;
+                background: transparent;
+                color: #dfe3e8;
+                padding: 3px 0;
+                font-weight: 600;
+                text-align: left;
+            }
+            QPushButton#CollapseHeader:hover {
+                background: transparent;
+                color: #f08c28;
+            }
+            QPushButton#CollapseHeader:pressed {
+                background: transparent;
+                color: #f08c28;
+            }
+            QPushButton#CollapseHeader:focus { outline: none; }
+        """)
+        vbox.addWidget(toggle)
+
+        frame = QtWidgets.QFrame()
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setContentsMargins(8, 4, 8, 8)
+        frame_layout.addWidget(content_widget)
+        vbox.addWidget(frame)
+
+        state = {"open": expanded}
+
+        def on_click():
+            state["open"] = not state["open"]
+            frame.setVisible(state["open"])
+            toggle.setText((f"{arrow_open} " if state["open"] else f"{arrow_closed} ") + title)
 
         toggle.clicked.connect(on_click)
         frame.setVisible(expanded)

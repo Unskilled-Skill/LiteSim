@@ -2,6 +2,9 @@
 import time
 import math
 import sys
+import socket
+import threading
+import json
 
 try:
     from xarm.wrapper import XArmAPI as RealXArmAPI
@@ -26,6 +29,9 @@ class SimXArmAPI:
         self.last_rpy = [180, 0, 0]
         
         self.real_arm = None
+        self.stream_thread = None
+        self.stream_running = False
+        self.stream_connected = False
 
     def _clamp(self, n, minn, maxn):
         return max(min(maxn, n), minn)
@@ -167,6 +173,14 @@ class SimXArmAPI:
         else: 
             target_deg = [float(a) for a in angle]
         
+        # Clamp joint speeds/acc to Lite6 reference limits
+        max_joint_speed = getattr(config, "JOINT_SPEED_LIMIT_DEG_S", None)
+        if max_joint_speed and (speed is None or speed > max_joint_speed):
+            speed = max_joint_speed
+        max_joint_acc = getattr(config, "JOINT_ACC_LIMIT_DEG_S2", None)
+        if max_joint_acc and mvacc is not None and mvacc > max_joint_acc:
+            mvacc = max_joint_acc
+        
         # Clamp values to safe values for bot
         safe_target = []
         for i, val in enumerate(target_deg):
@@ -224,6 +238,23 @@ class SimXArmAPI:
         target_pos = [x/1000.0, y/1000.0, z/1000.0]
         target_orient = rpy_to_matrix(roll, pitch, yaw)
 
+        # Clamp TCP speed/acc/jerk to Lite6 reference limits
+        if speed is None:
+            speed = 100
+        max_tcp_speed = getattr(config, "TCP_SPEED_LIMIT_MM_S", None)
+        if max_tcp_speed and speed > max_tcp_speed:
+            speed = max_tcp_speed
+        acc = kwargs.get("acc", None)
+        max_tcp_acc = getattr(config, "TCP_ACC_LIMIT_MM_S2", None)
+        if max_tcp_acc is not None and acc is not None and acc > max_tcp_acc:
+            kwargs["acc"] = max_tcp_acc
+            acc = max_tcp_acc
+        jerk = kwargs.get("jerk", None)
+        max_tcp_jerk = getattr(config, "TCP_JERK_LIMIT_MM_S3", None)
+        if max_tcp_jerk is not None and jerk is not None and jerk > max_tcp_jerk:
+            kwargs["jerk"] = max_tcp_jerk
+            jerk = max_tcp_jerk
+
         try:
             wait = kwargs.get('wait', True)
             speed_mm = speed if speed is not None else 100
@@ -271,8 +302,10 @@ class SimXArmAPI:
                 )
                 new_degrees = []
                 for i in range(1, 7):
-                    if i < len(real_joints): new_degrees.append(math.degrees(real_joints[i]))
-                    else: new_degrees.append(0.0)
+                    if i < len(real_joints): 
+                        new_degrees.append(math.degrees(real_joints[i]))
+                    else: 
+                        new_degrees.append(0.0)
                 new_degrees = normalize_angles(new_degrees)
                 self._interpolated_move(new_degrees, segment_duration)
                 last_rads = [0] + [math.radians(j) for j in self.joints_deg] + [0]
@@ -281,3 +314,61 @@ class SimXArmAPI:
             self._log(f"[IK ERROR] {e}")
             return 1
         return 0
+
+    # --- Streaming joints from external source (TCP JSON lines) ---
+    def start_joint_stream_listener(self, host="127.0.0.1", port=7777):
+        """
+        Start a background thread that listens on a TCP port for JSON lines:
+        {"joints_deg": [j1, j2, j3, j4, j5, j6]}
+        When received, updates the simulated (and real if connected) joints.
+        """
+        if self.stream_running:
+            self._log("[STREAM] Listener already running")
+            return
+
+        def worker():
+            self.stream_connected = False
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind((host, port))
+            srv.listen(1)
+            self._log(f"[STREAM] Listening for joint stream on {host}:{port}...")
+            self.stream_running = True
+            while self.stream_running:
+                conn, addr = srv.accept()
+                self._log(f"[STREAM] Client connected: {addr}")
+                self.stream_connected = True
+                try:
+                    with conn, conn.makefile("r") as f:
+                        for line in f:
+                            if not self.stream_running:
+                                break
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                msg = json.loads(line)
+                                joints = msg.get("joints_deg")
+                                if joints and len(joints) == config.JOINT_COUNT:
+                                    self.set_servo_angle(joints, wait=False)
+                            except Exception as e:
+                                self._log(f"[STREAM] Parse error: {e}")
+                except Exception as e:
+                    self._log(f"[STREAM] Connection error: {e}")
+                self._log("[STREAM] Client disconnected")
+                self.stream_connected = False
+            try:
+                srv.close()
+            except Exception:
+                pass
+
+        self.stream_thread = threading.Thread(target=worker, daemon=True)
+        self.stream_thread.start()
+
+    def stop_joint_stream_listener(self):
+        """Stop the background joint stream listener."""
+        if not self.stream_running:
+            return
+        self.stream_running = False
+        self.stream_connected = False
+        self._log("[STREAM] Listener stop requested")
