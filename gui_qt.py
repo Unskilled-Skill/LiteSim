@@ -5,6 +5,8 @@ import threading
 import queue
 import runpy
 import types
+import subprocess
+from functools import partial
 from PyQt5 import QtCore, QtWidgets, QtGui
 from pyvistaqt import QtInteractor
 
@@ -84,6 +86,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
             "eef": config.COLOR_EEF,
             "trace": config.COLOR_PATH,
         }
+        self.color_presets = {"Default": dict(self.color_vars)}
 
         self.loop_enabled = False
         self.speed_value = 1.0
@@ -106,6 +109,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
 
         self._load_history()
         self._load_stl_history()
+        self._refresh_color_presets()
 
         # Timers
         self.render_timer = QtCore.QTimer(self)
@@ -116,11 +120,60 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.queue_timer.timeout.connect(self._process_queues)
         self.queue_timer.start(30)
 
+    def _make_collapsible(self, title, content_widget, expanded=True):
+        """Return a small collapsible container with a toggle header and the given content."""
+        container = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+
+        toggle = QtWidgets.QPushButton(("▼ " if expanded else "► ") + title)
+        toggle.setCheckable(True)
+        toggle.setChecked(expanded)
+        toggle.setFlat(True)
+        toggle.setFocusPolicy(QtCore.Qt.NoFocus)
+        toggle.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+                color: #dfe3e8;
+                padding: 2px 0;
+                font-weight: 600;
+                text-align: left;
+            }
+            QPushButton:hover,
+            QPushButton:pressed,
+            QPushButton:checked,
+            QPushButton:checked:hover,
+            QPushButton:checked:pressed,
+            QPushButton:focus {
+                border: none;
+                background: transparent;
+                color: #dfe3e8;
+            }
+        """)
+        vbox.addWidget(toggle)
+
+        frame = QtWidgets.QFrame()
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setContentsMargins(8, 4, 8, 8)
+        frame_layout.addWidget(content_widget)
+        vbox.addWidget(frame)
+
+        def on_toggle(checked):
+            frame.setVisible(checked)
+            toggle.setText(("▼ " if checked else "► ") + title)
+
+        toggle.toggled.connect(on_toggle)
+        on_toggle(expanded)
+        return container
+
+
     def _build_ui(self):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
 
-        main_layout = QtWidgets.QHBoxLayout(central)
+        main_layout = QtWidgets.QVBoxLayout(central)
         splitter = QtWidgets.QSplitter()
         splitter.setOrientation(QtCore.Qt.Horizontal)
         splitter.setHandleWidth(8)
@@ -129,18 +182,27 @@ class QtControlPanel(QtWidgets.QMainWindow):
         # Left controls
         left = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left)
-        left_layout.setContentsMargins(10, 10, 10, 10)
+        # Extra right margin so vertical scrollbar never overlaps content
+        left_layout.setContentsMargins(10, 10, 16, 10)
         left_layout.setSpacing(12)
 
         # Script loading/history (top priority)
         script_group = QtWidgets.QGroupBox("Script Loading")
         sg_layout = QtWidgets.QHBoxLayout(script_group)
         self.combo_history = QtWidgets.QComboBox()
+        self.combo_history.setMinimumWidth(220)
         self.combo_history.currentIndexChanged.connect(self._on_history_select)
         sg_layout.addWidget(self.combo_history, 1)
         self.btn_browse = QtWidgets.QPushButton("Load .py script...")
+        self.btn_browse.setMinimumWidth(140)
         self.btn_browse.clicked.connect(self._browse_script)
         sg_layout.addWidget(self.btn_browse)
+        self.btn_refresh_scripts = QtWidgets.QPushButton("Refresh")
+        self.btn_refresh_scripts.setToolTip("Reload recent + examples")
+        self.btn_refresh_scripts.setMinimumWidth(90)
+        self.btn_refresh_scripts.clicked.connect(self._load_history)
+        sg_layout.addWidget(self.btn_refresh_scripts)
+        sg_layout.addStretch(1)
         left_layout.addWidget(script_group)
 
         # Simulation controls
@@ -188,6 +250,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
 
             spin = QtWidgets.QDoubleSpinBox()
             spin.setDecimals(1)
+            spin.setMinimumWidth(80)
             spin.setRange(*config.JOINT_LIMITS[i])
             spin.setSingleStep(0.5)
             spin.setValue(0.0)
@@ -217,55 +280,105 @@ class QtControlPanel(QtWidgets.QMainWindow):
 
         # Trace / visibility
         trace_group = QtWidgets.QGroupBox("Trace & Visibility")
-        tr_layout = QtWidgets.QHBoxLayout(trace_group)
+        trace_group.setTitle("")
+        tr_layout = QtWidgets.QGridLayout(trace_group)
         self.trace_chk = QtWidgets.QCheckBox("Trace Path")
         self.trace_chk.stateChanged.connect(self._toggle_trace)
-        tr_layout.addWidget(self.trace_chk)
+        tr_layout.addWidget(self.trace_chk, 0, 0, 1, 1)
+
+        tr_layout.addWidget(QtWidgets.QLabel("Source:"), 0, 1, 1, 1)
         self.trace_mode = QtWidgets.QComboBox()
         self.trace_mode.addItems(["Wrist", "Effector Tip"])
         self.trace_mode.currentIndexChanged.connect(self._change_trace_source)
-        tr_layout.addWidget(self.trace_mode)
+        self.trace_mode.setMinimumWidth(120)
+        tr_layout.addWidget(self.trace_mode, 0, 2, 1, 2)
+
         self.ghost_chk = QtWidgets.QCheckBox("Ghost Mode")
         self.ghost_chk.stateChanged.connect(self._apply_ghost_state)
-        tr_layout.addWidget(self.ghost_chk)
+        tr_layout.addWidget(self.ghost_chk, 1, 0, 1, 1)
+
         self.ignore_eef_chk = QtWidgets.QCheckBox("Ignore Effector")
         self.ignore_eef_chk.setEnabled(False)
         self.ignore_eef_chk.stateChanged.connect(self._apply_ghost_state)
-        tr_layout.addWidget(self.ignore_eef_chk)
+        tr_layout.addWidget(self.ignore_eef_chk, 1, 1, 1, 1)
+
         self.collision_alert_chk = QtWidgets.QCheckBox("Collision Alerts")
         self.collision_alert_chk.setChecked(True)
-        tr_layout.addWidget(self.collision_alert_chk)
-        left_layout.addWidget(trace_group)
+        tr_layout.addWidget(self.collision_alert_chk, 1, 2, 1, 1)
+        tr_layout.setColumnStretch(3, 1)
+        left_layout.addWidget(self._make_collapsible("Trace & Visibility", trace_group, expanded=True))
 
-        # Color settings
+        # Color settings (single column, scroll-friendly)
         color_group = QtWidgets.QGroupBox("Color Settings")
+        color_group.setTitle("")
         cg_layout = QtWidgets.QGridLayout(color_group)
+        cg_layout.setContentsMargins(10, 8, 10, 8)
+        cg_layout.setHorizontalSpacing(10)
+        cg_layout.setVerticalSpacing(8)
         self.color_inputs = {}
         self.color_previews = {}
         labels = [("Background", "bg"), ("Robot Arm", "arm"), ("Wrist", "wrist"), ("End-Effector", "eef"), ("Trace", "trace")]
+
         for idx, (lbl, key) in enumerate(labels):
             cg_layout.addWidget(QtWidgets.QLabel(lbl + ":"), idx, 0)
+
             edit = QtWidgets.QLineEdit(self.color_vars[key])
             self.color_inputs[key] = edit
             cg_layout.addWidget(edit, idx, 1)
+
             preview = QtWidgets.QLabel()
             preview.setFixedSize(22, 22)
             preview.setFrameShape(QtWidgets.QFrame.Box)
             preview.setLineWidth(1)
             self.color_previews[key] = preview
             cg_layout.addWidget(preview, idx, 2)
+
             btn_apply = QtWidgets.QPushButton("Apply")
+            btn_apply.setMinimumWidth(110)
+            btn_apply.setMinimumHeight(28)
+            btn_apply.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             btn_apply.clicked.connect(lambda _, k=key: self._apply_color(k))
             cg_layout.addWidget(btn_apply, idx, 3)
+
             btn_reset = QtWidgets.QPushButton("Reset")
+            btn_reset.setMinimumWidth(110)
+            btn_reset.setMinimumHeight(28)
+            btn_reset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             btn_reset.clicked.connect(lambda _, k=key: self._reset_color(k))
             cg_layout.addWidget(btn_reset, idx, 4)
+
             edit.textChanged.connect(lambda val, k=key: self._update_color_preview(k, val))
             self._update_color_preview(key, self.color_vars[key])
-        left_layout.addWidget(color_group)
+
+        preset_row = QtWidgets.QHBoxLayout()
+        preset_row.setContentsMargins(0, 8, 0, 0)
+        preset_row.setSpacing(8)
+        preset_row.addWidget(QtWidgets.QLabel("Preset:"))
+        self.combo_color_presets = QtWidgets.QComboBox()
+        self.combo_color_presets.setMinimumWidth(180)
+        self.combo_color_presets.addItem("Default")
+        self.combo_color_presets.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        preset_row.addWidget(self.combo_color_presets, 1)
+        self.btn_save_preset = QtWidgets.QPushButton("Save Current")
+        self.btn_save_preset.setMinimumWidth(120)
+        self.btn_save_preset.setMinimumHeight(28)
+        self.btn_save_preset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        preset_row.addWidget(self.btn_save_preset)
+        self.btn_load_preset = QtWidgets.QPushButton("Load")
+        self.btn_load_preset.setMinimumWidth(90)
+        self.btn_load_preset.setMinimumHeight(28)
+        self.btn_load_preset.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        preset_row.addWidget(self.btn_load_preset)
+        preset_row.addStretch(1)
+        cg_layout.addLayout(preset_row, len(labels), 0, 1, 5)
+
+        cg_layout.setColumnStretch(1, 1)
+        color_group.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        left_layout.addWidget(self._make_collapsible("Color Settings", color_group, expanded=True))
 
         # End effector config
         ef_group = QtWidgets.QGroupBox("End-Effector Configuration")
+        ef_group.setTitle("")
         ef_layout = QtWidgets.QVBoxLayout(ef_group)
         self.scale_mm_chk = QtWidgets.QCheckBox("Custom end-effector is in millimeters?")
         self.scale_mm_chk.setChecked(True)
@@ -290,10 +403,11 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self.btn_preset_remove.clicked.connect(self._remove_gripper)
         preset_row.addWidget(self.btn_preset_remove)
         ef_layout.addLayout(preset_row)
-        left_layout.addWidget(ef_group)
+        left_layout.addWidget(self._make_collapsible("End-Effector Configuration", ef_group, expanded=True))
 
         # Camera controls
         cam_group = QtWidgets.QGroupBox("Camera Controls")
+        cam_group.setTitle("")
         cam_layout = QtWidgets.QGridLayout(cam_group)
         cam_buttons = [
             ("Front", lambda: self.viz.set_camera_view('front', 1.6)),
@@ -307,14 +421,41 @@ class QtControlPanel(QtWidgets.QMainWindow):
             btn = QtWidgets.QPushButton(text)
             btn.clicked.connect(fn)
             cam_layout.addWidget(btn, 0, col)
-        left_layout.addWidget(cam_group)
+        left_layout.addWidget(self._make_collapsible("Camera Controls", cam_group, expanded=True))
 
         left_layout.addStretch(1)
         left_container = QtWidgets.QWidget()
         left_container.setLayout(left_layout)
-        left_container.setMinimumWidth(360)
-        left_container.setMaximumWidth(420)
-        splitter.addWidget(left_container)
+        left_container.setMinimumWidth(480)
+        left_scroll = QtWidgets.QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        left_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        left_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        left_scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollArea > QWidget > QWidget { background: #242424; }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 10px;
+                margin: 4px 0 4px 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #3a3a3a;
+                min-height: 24px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
+        left_scroll.setWidget(left_container)
+        left_scroll.setMinimumWidth(480)
+        left_scroll.setMaximumWidth(650)
+        splitter.addWidget(left_scroll)
 
         # Right side: viewer and log
         right_split = QtWidgets.QSplitter()
@@ -341,6 +482,15 @@ class QtControlPanel(QtWidgets.QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 1000])
         right_split.setSizes([750, 200])
+
+        # Footer utility bar with restart button (least intrusive)
+        footer = QtWidgets.QHBoxLayout()
+        footer.addStretch(1)
+        self.btn_refresh = QtWidgets.QPushButton("Restart GUI")
+        self.btn_refresh.setToolTip("Restart the GUI (auto relaunches)")
+        self.btn_refresh.clicked.connect(self._refresh_gui)
+        footer.addWidget(self.btn_refresh)
+        main_layout.addLayout(footer)
 
     # ---------- History helpers ----------
     def _load_history(self):
@@ -483,6 +633,14 @@ class QtControlPanel(QtWidgets.QMainWindow):
         if self.viz:
             self.viz.reset_camera_view()
 
+    def _refresh_gui(self):
+        script_path = os.path.abspath(sys.argv[0])
+        cmd = [sys.executable, script_path]
+        try:
+            subprocess.Popen(cmd, cwd=os.path.dirname(script_path))
+        except Exception:
+            pass
+        QtWidgets.QApplication.quit()
     def _browse_script(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Select script", os.getcwd(), "Python Files (*.py)")
         if path:
@@ -563,6 +721,34 @@ class QtControlPanel(QtWidgets.QMainWindow):
         }[key]
         self.color_inputs[key].setText(default)
         self._apply_color(key)
+
+    def _save_color_preset(self):
+        name, ok = QtWidgets.QInputDialog.getText(self, "Save Color Preset", "Preset name:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        self.color_presets[name] = dict(self.color_vars)
+        self._refresh_color_presets(selected=name)
+
+    def _load_color_preset(self):
+        name = self.combo_color_presets.currentText()
+        if name in self.color_presets:
+            vals = self.color_presets[name]
+            for k, v in vals.items():
+                if k in self.color_inputs:
+                    self.color_inputs[k].setText(v)
+                    self._apply_color(k)
+
+    def _refresh_color_presets(self, selected=None):
+        self.combo_color_presets.blockSignals(True)
+        self.combo_color_presets.clear()
+        for key in self.color_presets.keys():
+            self.combo_color_presets.addItem(key)
+        if selected and selected in self.color_presets:
+            self.combo_color_presets.setCurrentText(selected)
+        else:
+            self.combo_color_presets.setCurrentText("Default")
+        self.combo_color_presets.blockSignals(False)
 
     def _update_color_preview(self, key, val):
         if key not in self.color_previews:
@@ -763,6 +949,60 @@ class QtControlPanel(QtWidgets.QMainWindow):
                     self.joint_sliders[idx].blockSignals(True)
                     self.joint_sliders[idx].setValue(int(val * 10))
                     self.joint_sliders[idx].blockSignals(False)
+
+    # Final override to keep collapsible headers plain (no state styling)
+    def _make_collapsible(self, title, content_widget, expanded=True):
+        container = QtWidgets.QWidget()
+        vbox = QtWidgets.QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+
+        arrow_open = "▾"
+        arrow_closed = "▸"
+        toggle = QtWidgets.QPushButton((f"{arrow_open}  " if expanded else f"{arrow_closed}  ") + title)
+        toggle.setObjectName("CollapseHeader")
+        toggle.setFlat(True)
+        toggle.setCheckable(False)
+        toggle.setAutoDefault(False)
+        toggle.setDefault(False)
+        toggle.setFocusPolicy(QtCore.Qt.NoFocus)
+        toggle.setStyleSheet("""
+            QPushButton#CollapseHeader {
+                border: none;
+                background: transparent;
+                color: #dfe3e8;
+                padding: 3px 0;
+                font-weight: 600;
+                text-align: left;
+            }
+            QPushButton#CollapseHeader:hover {
+                background: #2b2b2b;
+                color: #f08c28;
+            }
+            QPushButton#CollapseHeader:pressed {
+                background: #262626;
+                color: #f08c28;
+            }
+            QPushButton#CollapseHeader:focus { outline: none; }
+        """)
+        vbox.addWidget(toggle)
+
+        frame = QtWidgets.QFrame()
+        frame_layout = QtWidgets.QVBoxLayout(frame)
+        frame_layout.setContentsMargins(8, 4, 8, 8)
+        frame_layout.addWidget(content_widget)
+        vbox.addWidget(frame)
+
+        state = {"open": expanded}
+
+        def on_click():
+            state["open"] = not state["open"]
+            frame.setVisible(state["open"])
+            toggle.setText((f"{arrow_open}  " if state["open"] else f"{arrow_closed}  ") + title)
+
+        toggle.clicked.connect(on_click)
+        frame.setVisible(expanded)
+        return container
 
 
 def main():

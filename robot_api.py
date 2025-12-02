@@ -225,30 +225,57 @@ class SimXArmAPI:
         target_orient = rpy_to_matrix(roll, pitch, yaw)
 
         try:
-            real_joints = self.chain.inverse_kinematics(
-                target_position=target_pos,
-                target_orientation=target_orient, 
-                orientation_mode="all",
-                initial_position=current_rads[:len(self.chain.links)]
-            )
-            
-            new_degrees = []
-            for i in range(1, 7):
-                if i < len(real_joints): new_degrees.append(math.degrees(real_joints[i]))
-                else: new_degrees.append(0.0)
-            new_degrees = normalize_angles(new_degrees)
-            
-            if speed is None: speed = 100 
-            dist = math.sqrt((x - cur_x)**2 + (y - cur_y)**2 + (z - cur_z)**2)
-            estimated_duration = dist / float(speed)
-            if estimated_duration < 0.1: estimated_duration = 0.2
-
             wait = kwargs.get('wait', True)
-            if wait:
-                self._interpolated_move(new_degrees, estimated_duration)
-            else:
-                self.joints_deg = new_degrees
+            speed_mm = speed if speed is not None else 100
+            # Straight-line cartesian interpolation for smoother paths
+            dist = math.sqrt((x - cur_x)**2 + (y - cur_y)**2 + (z - cur_z)**2)
+            segments = max(2, int(dist / 8.0))  # ~8 mm resolution
+            segments = min(segments, 200)
+            total_duration = dist / float(speed_mm) if speed_mm > 0 else 0.2
+            if total_duration < 0.1: total_duration = 0.2
+            segment_duration = total_duration / segments if segments > 0 else total_duration
+
+            start_pos = [cur_x/1000.0, cur_y/1000.0, cur_z/1000.0]
+            end_pos = target_pos
+            last_rads = current_rads[:len(self.chain.links)]
+
+            if not wait:
+                # Single IK solve (non-blocking)
+                real_joints = self.chain.inverse_kinematics(
+                    target_position=end_pos,
+                    target_orientation=target_orient,
+                    orientation_mode="all",
+                    initial_position=last_rads
+                )
+                new_degrees = []
+                for i in range(1, 7):
+                    if i < len(real_joints): new_degrees.append(math.degrees(real_joints[i]))
+                    else: new_degrees.append(0.0)
+                self.joints_deg = normalize_angles(new_degrees)
                 self._update_gui()
+                return 0
+
+            # Interpolate along the line for smoother straight edges
+            for step in range(1, segments + 1):
+                frac = step / segments
+                interp_pos = [
+                    start_pos[0] + (end_pos[0] - start_pos[0]) * frac,
+                    start_pos[1] + (end_pos[1] - start_pos[1]) * frac,
+                    start_pos[2] + (end_pos[2] - start_pos[2]) * frac,
+                ]
+                real_joints = self.chain.inverse_kinematics(
+                    target_position=interp_pos,
+                    target_orientation=target_orient,
+                    orientation_mode="all",
+                    initial_position=last_rads
+                )
+                new_degrees = []
+                for i in range(1, 7):
+                    if i < len(real_joints): new_degrees.append(math.degrees(real_joints[i]))
+                    else: new_degrees.append(0.0)
+                new_degrees = normalize_angles(new_degrees)
+                self._interpolated_move(new_degrees, segment_duration)
+                last_rads = [0] + [math.radians(j) for j in self.joints_deg] + [0]
 
         except Exception as e:
             self._log(f"[IK ERROR] {e}")
