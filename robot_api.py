@@ -29,6 +29,7 @@ class SimXArmAPI:
         self.last_rpy = [180, 0, 0]
         
         self.real_arm = None
+        self.sim_only_mode = True
         self.stream_thread = None
         self.stream_running = False
         self.stream_connected = False
@@ -116,19 +117,24 @@ class SimXArmAPI:
     def motion_enable(self, enable=True): 
         self._check_controls()
         self._log(f"[SIM] Motion Enable: {enable}")
-        if self.real_arm: self.real_arm.motion_enable(enable=enable)
+        if self.real_arm and not self.sim_only_mode:
+            self.real_arm.motion_enable(enable=enable)
         return 0
     def set_mode(self, mode): 
-        if self.real_arm: self.real_arm.set_mode(mode)
+        if self.real_arm and not self.sim_only_mode:
+            self.real_arm.set_mode(mode)
         return 0
     def set_state(self, state): 
-        if self.real_arm: self.real_arm.set_state(state)
+        if self.real_arm and not self.sim_only_mode:
+            self.real_arm.set_state(state)
         return 0
     def clean_warn(self): 
-        if self.real_arm: self.real_arm.clean_warn()
+        if self.real_arm and not self.sim_only_mode:
+            self.real_arm.clean_warn()
         return 0
     def clean_error(self): 
-        if self.real_arm: self.real_arm.clean_error()
+        if self.real_arm and not self.sim_only_mode:
+            self.real_arm.clean_error()
         return 0
     def disconnect(self): 
         self._log("[SCRIPT] Disconnect requested (ignored by Sim).")
@@ -198,7 +204,7 @@ class SimXArmAPI:
     
         if speed is None or speed <= 0: speed = 50 
 
-        if self.real_arm:
+        if self.real_arm and not self.sim_only_mode:
             self.real_arm.set_servo_angle(final_target, speed=speed, mvacc=mvacc, is_radian=False, wait=False)
 
         max_diff = max([abs(t - c) for t, c in zip(final_target, self.joints_deg)])
@@ -227,7 +233,7 @@ class SimXArmAPI:
 
         self._log(f"[MOVE] x={x:.0f} y={y:.0f} z={z:.0f}")
 
-        if self.real_arm:
+        if self.real_arm and not self.sim_only_mode:
             self.real_arm.set_position(x=x, y=y, z=z, roll=roll, pitch=pitch, yaw=yaw, 
                                        speed=speed, wait=False, **kwargs)
 
@@ -372,3 +378,8 @@ class SimXArmAPI:
         self.stream_running = False
         self.stream_connected = False
         self._log("[STREAM] Listener stop requested")
+
+    # Sim-only safety toggle
+    def set_sim_only(self, enabled: bool):
+        self.sim_only_mode = bool(enabled)
+        self._log(f"[REAL] Sim-only mode {'ON' if self.sim_only_mode else 'OFF'}")

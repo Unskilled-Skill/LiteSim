@@ -45,7 +45,7 @@ def apply_dark_palette(app: QtWidgets.QApplication):
         QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #f08c28; }
         QFrame, QSplitter { background: #242424; }
         QSplitter::handle { background: #2f2f2f; }
-        QPushButton { background-color: #2b2b2b; border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 12px; min-height: 28px; color: #e4e7ec; text-align: center; }
+        QPushButton { background-color: #2b2b2b; border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 10px; color: #e4e7ec; }
         QPushButton:hover { background-color: #333333; border-color: #f08c28; }
         QPushButton:pressed { background-color: #202020; border-color: #f08c28; }
         QPushButton:disabled { color: #6f7378; border-color: #2c2c2c; }
@@ -197,7 +197,7 @@ class QtControlPanel(QtWidgets.QMainWindow):
         # Restart GUI (left-aligned)
         btn_refresh_header = QtWidgets.QPushButton("Restart GUI")
         btn_refresh_header.setToolTip("Restart the GUI (auto relaunches)")
-        btn_refresh_header.setFixedHeight(28)
+        btn_refresh_header.setFixedHeight(26)
         btn_refresh_header.clicked.connect(self._refresh_gui)
         header.addWidget(btn_refresh_header)
 
@@ -213,16 +213,16 @@ class QtControlPanel(QtWidgets.QMainWindow):
         ]
         for text, fn in cam_buttons:
             btn = QtWidgets.QPushButton(text)
-            btn.setFixedHeight(28)
+            btn.setFixedHeight(26)
             btn.clicked.connect(fn)
             header.addWidget(btn)
 
         btn_reset_view_global = QtWidgets.QPushButton("Reset View")
-        btn_reset_view_global.setFixedHeight(28)
+        btn_reset_view_global.setFixedHeight(26)
         btn_reset_view_global.clicked.connect(self._reset_view)
         header.addWidget(btn_reset_view_global)
         btn_reset_colors_global = QtWidgets.QPushButton("Reset Colors")
-        btn_reset_colors_global.setFixedHeight(28)
+        btn_reset_colors_global.setFixedHeight(26)
         btn_reset_colors_global.clicked.connect(self._reset_all_colors)
         header.addWidget(btn_reset_colors_global)
         main_layout.addLayout(header)
@@ -669,6 +669,9 @@ class QtControlPanel(QtWidgets.QMainWindow):
         self._load_stl_history()
 
     def _append_log(self, msg):
+        # Ensure a consistent prefix for readability
+        if msg and not str(msg).startswith("["):
+            msg = "[INFO] " + str(msg)
         self.log_text.append(msg)
         self.log_text.moveCursor(QtGui.QTextCursor.End)
 
