@@ -16,11 +16,19 @@ JOINT_COUNT = 6
 JOINT_LIMITS = [
     (-360, 360), # J1: Base
     (-150, 150),  # J2: Shoulder
-    (-35, 135), # J3: Elbow
+    (-3.5, 300.0), # J3: Elbow (Lite6 reference)
     (-360, 360), # J4: Wrist Roll
     (-124, 124), # J5: Wrist Pitch
     (-360, 360)  # J6: Wrist Roll
 ]
+
+# Motion limits from Lite6 reference
+TCP_SPEED_LIMIT_MM_S = 500.0
+TCP_ACC_LIMIT_MM_S2 = 50000.0
+TCP_JERK_LIMIT_MM_S3 = 100000.0
+JOINT_SPEED_LIMIT_DEG_S = 180.0
+JOINT_ACC_LIMIT_DEG_S2 = 1145.0
+JOINT_JERK_LIMIT_DEG_S3 = 28647.0
 ROBOT_Z_OFFSET = 0.0
 SIM_SPEED_FACTOR = 1.0 
 ROBOT_SCAN_PORT = 30002
