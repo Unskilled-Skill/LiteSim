@@ -1,6 +1,6 @@
 """
 Gentle breathing motion: subtle, organic oscillations that make the arm feel alive.
-J2â€“J4 carry most of the motion with slightly different slow frequencies.
+J2–J4 carry most of the motion with slightly different slow frequencies.
 """
 import math
 import time

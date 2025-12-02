@@ -1,6 +1,6 @@
 """
-Affirming nod / greeting loop: polite nod with gentle decay and ramping.
-Useful for HRI moments; focuses on J2/J3.
+Affirming nod / greeting loop: polite nod with gentle ramping.
+Focuses on J2/J3.
 """
 import math
 import time
