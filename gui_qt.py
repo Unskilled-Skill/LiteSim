@@ -60,6 +60,21 @@ def apply_dark_palette(app: QtWidgets.QApplication):
         QCheckBox { spacing: 6px; }
     """)
 
+def show_splash(app: QtWidgets.QApplication):
+    """Display a lightweight splash while heavy Qt/PyVista bits initialize."""
+    pixmap = QtGui.QPixmap(config.ICON_PATH)
+    if pixmap.isNull():
+        pixmap = QtGui.QPixmap(320, 200)
+        pixmap.fill(QtGui.QColor("#242424"))
+    else:
+        pixmap = pixmap.scaled(320, 320, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    splash = QtWidgets.QSplashScreen(pixmap)
+    splash.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint)
+    splash.showMessage(f"{config.APP_NAME} is loading...", QtCore.Qt.AlignBottom | QtCore.Qt.AlignHCenter, QtGui.QColor("#f08c28"))
+    splash.show()
+    app.processEvents()
+    return splash
+
 class AppContext:
     def __init__(self):
         self.log_queue = queue.Queue()
@@ -1483,8 +1498,11 @@ class QtControlPanel(QtWidgets.QMainWindow):
 def main():
     app = QtWidgets.QApplication(sys.argv)
     apply_dark_palette(app)
+    splash = show_splash(app)
     win = QtControlPanel()
     win.show()
+    if splash:
+        splash.finish(win)
     sys.exit(app.exec_())
 
 

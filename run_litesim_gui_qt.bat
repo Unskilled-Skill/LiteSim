@@ -3,7 +3,8 @@ setlocal
 set "ROOT=%~dp0"
 
 if exist "%ROOT%\\.venv\\Scripts\\python.exe" (
-    "%ROOT%\\.venv\\Scripts\\python.exe" "%ROOT%\\gui_qt.py"
+    start "" "%ROOT%\\.venv\\Scripts\\pythonw.exe" "%ROOT%\\launch_gui_qt.py"
 ) else (
-    python "%ROOT%\\gui_qt.py"
+    start "" pythonw "%ROOT%\\launch_gui_qt.py"
 )
+exit /b 0

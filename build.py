@@ -1,22 +1,24 @@
-import PyInstaller.__main__
 import os
 import sys
-import shutil
+
+import PyInstaller.__main__
 import config
 
+# Allow overrides via env (set LITESIM_APP_NAME, LITESIM_VERSION, LITESIM_AUTHOR)
 APP_NAME = config.APP_NAME
 VERSION = config.APP_VERSION
 AUTHOR = config.AUTHOR
+
 ICON_FILE = "icon.icns" if sys.platform == "darwin" else "icon.ico"
 ICON_PATH = os.path.join("assets", ICON_FILE)
-
 SEPARATOR = ":" if sys.platform == "darwin" else ";"
 
 
-# Windows
 def create_windows_version_file():
+    """Generate a temporary version file for Windows executable metadata."""
     v_parts = VERSION.split(".")
-    while len(v_parts) < 4: v_parts.append("0")
+    while len(v_parts) < 4:
+        v_parts.append("0")
     version_tuple = ", ".join(v_parts)
 
     content = f"""
@@ -41,7 +43,7 @@ VSVersionInfo(
         StringStruct(u'FileDescription', u'{APP_NAME}'),
         StringStruct(u'FileVersion', u'{VERSION}'),
         StringStruct(u'InternalName', u'{APP_NAME}'),
-        StringStruct(u'LegalCopyright', u'© {AUTHOR}.'),
+        StringStruct(u'LegalCopyright', u'Ac {AUTHOR}.'),
         StringStruct(u'OriginalFilename', u'{BUILD_NAME}.exe'),
         StringStruct(u'ProductName', u'{APP_NAME}'),
         StringStruct(u'ProductVersion', u'{VERSION}')])
@@ -54,73 +56,72 @@ VSVersionInfo(
         f.write(content)
     return "version_info.txt"
 
+
 if sys.platform == "win32":
-    # Windows: AppName_Version.exe
     BUILD_NAME = f"{APP_NAME}_{VERSION}"
 elif sys.platform == "darwin":
-    # macOS: AppName.app (without version for easier updating)
     BUILD_NAME = f"{APP_NAME}"
+else:
+    BUILD_NAME = APP_NAME
 
-# BUILD ARGS
-args = [
-    'main.py',                        
-    f'--name={BUILD_NAME}',                                    
-    f'--icon={ICON_PATH}',            
-    
-    f'--add-data=assets{SEPARATOR}assets',
-    f'--add-data=model{SEPARATOR}model',
-    f'--add-data=examples{SEPARATOR}examples',
-    
-    '--hidden-import=PIL._tkinter_finder',
-    '--hidden-import=vtkmodules',
-    '--hidden-import=sv_ttk',
-    '--hidden-import=robot_api',
-    '--hidden-import=visualizer',
-    '--hidden-import=config',
-    '--hidden-import=utils',
-    '--noconsole',                
-    '--clean', 
+hidden_imports = [
+    "PIL._tkinter_finder",
+    "vtkmodules",
+    "sv_ttk",
+    "robot_api",
+    "visualizer",
+    "config",
+    "utils",
 ]
+
+args = [
+    "launch_gui_qt.py",
+    f"--name={BUILD_NAME}",
+    f"--icon={ICON_PATH}",
+    f"--add-data=assets{SEPARATOR}assets",
+    f"--add-data=model{SEPARATOR}model",
+    f"--add-data=examples{SEPARATOR}examples",
+    "--noconsole",
+    "--clean",
+]
+for h in hidden_imports:
+    args.append(f"--hidden-import={h}")
 
 if sys.platform == "win32":
     print("--- BUILDING FOR WINDOWS ---")
-    args.append('--onefile')
+    args.append("--onefile")
     v_file = create_windows_version_file()
-    args.append(f'--version-file={v_file}')
-
+    args.append(f"--version-file={v_file}")
 elif sys.platform == "darwin":
     print("--- BUILDING FOR MACOS ---")
-    args.append('--onedir')
+    args.append("--onedir")
     bundle_id = f"nl.{AUTHOR.lower().replace(' ', '')}.{APP_NAME.lower()}"
-    args.append(f'--osx-bundle-identifier={bundle_id}')
+    args.append(f"--osx-bundle-identifier={bundle_id}")
 
-# PYINSTALLER
 print(f"Start build v{VERSION} by {AUTHOR}...")
-PyInstaller.__main__.run(args)
+try:
+    PyInstaller.__main__.run(args)
 
-# MACOS ARGS
-if sys.platform == "darwin":
-    import plistlib
-    
-    app_path = os.path.join("dist", f"{APP_NAME}.app")
-    plist_path = os.path.join(app_path, "Contents", "Info.plist")
-    
-    if os.path.exists(plist_path):
-        print("Updating macOS Info.plist metadata...")
-        with open(plist_path, 'rb') as f:
-            pl = plistlib.load(f)
-        
-        # Inject metadata
-        pl['CFBundleShortVersionString'] = VERSION
-        pl['CFBundleVersion'] = VERSION
-        pl['NSHumanReadableCopyright'] = f"© 2025 {AUTHOR}"
-        pl['CFBundleGetInfoString'] = f"{APP_NAME} {VERSION}"
-        
-        with open(plist_path, 'wb') as f:
-            plistlib.dump(pl, f)
+    if sys.platform == "darwin":
+        import plistlib
 
-# Cleanup
-if os.path.exists("version_info.txt"):
-    os.remove("version_info.txt")
+        app_path = os.path.join("dist", f"{APP_NAME}.app")
+        plist_path = os.path.join(app_path, "Contents", "Info.plist")
 
-print(f"\nBuild complete in /dist folder.")
+        if os.path.exists(plist_path):
+            print("Updating macOS Info.plist metadata...")
+            with open(plist_path, "rb") as f:
+                pl = plistlib.load(f)
+
+            pl["CFBundleShortVersionString"] = VERSION
+            pl["CFBundleVersion"] = VERSION
+            pl["NSHumanReadableCopyright"] = f"Ac 2025 {AUTHOR}"
+            pl["CFBundleGetInfoString"] = f"{APP_NAME} {VERSION}"
+
+            with open(plist_path, "wb") as f:
+                plistlib.dump(pl, f)
+finally:
+    if os.path.exists("version_info.txt"):
+        os.remove("version_info.txt")
+
+print("\nBuild complete in /dist folder.")

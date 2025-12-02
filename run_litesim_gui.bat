@@ -14,14 +14,21 @@ if not exist "%VENV_DIR%\Scripts\python.exe" (
 )
 
 set "PYTHON=%VENV_DIR%\Scripts\python.exe"
+set "PYTHONW=%VENV_DIR%\Scripts\pythonw.exe"
 set "PIP=%VENV_DIR%\Scripts\pip.exe"
 
 if exist "%REPO_DIR%requirements.txt" (
     echo [LiteSim] Ensuring dependencies are installed in the virtual environment...
     "%PYTHON%" -m pip install --upgrade pip >nul
-    "%PIP%" install -r "%REPO_DIR%requirements.txt"
+    "%PIP%" install -r "%REPO_DIR%requirements.txt" >nul
 )
 
 echo [LiteSim] Launching GUI...
-"%PYTHON%" "%REPO_DIR%main.py"
+if exist "%PYTHONW%" (
+    start "" "%PYTHONW%" "%REPO_DIR%launch_gui_qt.py"
+    exit /b 0
+) else (
+    start "" "%PYTHON%" "%REPO_DIR%launch_gui_qt.py"
+    exit /b 0
+)
 endlocal

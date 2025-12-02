@@ -3,13 +3,13 @@ import sys
 import os
 
 # --- APP INFO ---
-APP_NAME = "LiteSim"
-APP_VERSION = "1.9.13"
-AUTHOR = "Dylan Kiesebrink"
-GITHUB_URL = "https://github.com/scoopy115/LiteSim"
-REPO_OWNER = "scoopy115"
+APP_NAME = os.environ.get("LITESIM_APP_NAME", "Litesim-(spoon)")
+APP_VERSION = os.environ.get("LITESIM_VERSION", "2.0.0")
+AUTHOR = os.environ.get("LITESIM_AUTHOR", "Rochee Faverey; Dylan Kiesebrink")
+GITHUB_URL = "https://github.com/Unskilled-Skill/LiteSim"
+REPO_OWNER = "Unskilled-Skill"
 REPO_NAME = "LiteSim"
-PORTFOLIO_URL = "https://dylankiesebrink.nl"
+PORTFOLIO_URL = "rocheefaverey@hotmail.com"
 
 # --- ROBOT CONFIGURATION ---
 JOINT_COUNT = 6
